@@ -206,10 +206,11 @@ function renderBudgets() {
     return `<article class="card budget-row">
       <div class="budget-name"><i><span>${escapeHtml(budget.category.slice(0, 1))}</span></i><div><strong>${escapeHtml(budget.category)}</strong><small>达到 ${Math.round(budget.warning_threshold * 100)}% 时提醒</small></div></div>
       <div><div class="budget-meta"><span>已用 ${money.format(budget.spent)}</span><span>${percent}%</span></div><div class="progress ${tone}"><span style="width:${Math.min(percent, 100)}%"></span></div><div class="budget-meta"><span>${ratio >= 1 ? `已超支 ${money.format(-remaining)}` : ratio >= budget.warning_threshold ? '已触发预警' : '状态正常'}</span><span>${remaining >= 0 ? `剩余 ${money.format(remaining)}` : '需复盘'}</span></div></div>
-      <div class="budget-number"><strong>${money.format(budget.monthly_limit)}</strong><small>月度预算</small></div>
+      <div class="budget-number"><strong>${money.format(budget.monthly_limit)}</strong><small>月度预算</small><button class="btn" data-edit-budget="${budget.id}">编辑</button></div>
     </article>`;
   }).join('');
-  if (!state.budgets.length) container.textContent='尚未设置预算';
+  container.querySelectorAll('[data-edit-budget]').forEach(btn=>btn.addEventListener('click',()=>openBudgetSettings(Number(btn.dataset.editBudget))));
+  if (!state.budgets.length) container.textContent='尚未设置预算，请点击预算设置新增';
   renderAlerts();
   const total = state.budgets.reduce((sum, item) => sum + item.monthly_limit, 0);
   const spent = state.budgets.reduce((sum, item) => sum + item.spent, 0);
@@ -325,6 +326,7 @@ async function start() {
   document.getElementById('entryDate').value=now.toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});
   editingAccountId=null;
   setupAccountForm();
+  setupBudgetForm();
   bindEvents();
   refreshIcons();
   renderImportStep();
@@ -421,4 +423,34 @@ async function loadFxManagement(){
 async function refreshFxManagement(){
  const btn=document.getElementById('refreshFxBtn');if(btn.disabled)return;btn.disabled=true;
  try{const fx=await api('/app/fm/api/fx',{method:'POST',body:'{}'});formFx=fx;await Promise.all([loadAccounts(),loadSummary()]);await loadFxManagement();showToast(fx.stale?(fx.warning||'同步失败，保留原值'):'汇率已同步，自动折算账户已更新');}catch(e){document.getElementById('fxStatus').textContent=e.message;showToast(e.message);}finally{btn.disabled=false;}
+}
+
+var editingBudgetId=null;
+function setupBudgetForm(){
+ const modal=document.createElement('div');modal.id='budgetModal';modal.className='modal-backdrop';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-labelledby','budgetModalTitle');
+ modal.innerHTML=`<div class="modal"><div class="modal-head"><h2 id="budgetModalTitle">预算设置</h2><button class="close" data-close="budgetModal" aria-label="关闭">×</button></div><form id="budgetForm"><div class="modal-body"><div class="field"><label for="budgetChoice">选择预算</label><select id="budgetChoice"></select></div><div class="field"><label for="budgetCategory">消费分类</label><input class="input" id="budgetCategory" list="budgetCategories" required maxlength="100" placeholder="与流水分类保持一致"><datalist id="budgetCategories"><option value="日常消费"><option value="居住"><option value="交通出行"><option value="其他"></datalist></div><div class="field"><label for="budgetLimit">月度预算（人民币元）</label><input class="input" id="budgetLimit" type="number" min="0.01" step="0.01" required></div><div class="field"><label for="budgetThreshold">预警阈值（%）</label><input class="input" id="budgetThreshold" type="number" min="1" max="100" step="1" value="90" required></div><p id="budgetError" role="alert" style="color:#aa5144"></p><small>预算按北京时间自然月统计。达到设定阈值时在总览中提醒。</small></div><div class="modal-foot"><button class="btn" type="button" data-close="budgetModal">取消</button><button class="btn primary" type="submit" id="saveBudgetBtn">保存预算</button></div></form></div>`;
+ document.body.appendChild(modal);
+ document.getElementById('budgetSettingsBtn').addEventListener('click',()=>openBudgetSettings(null));
+ document.getElementById('budgetChoice').addEventListener('change',e=>populateBudget(e.target.value?Number(e.target.value):null));
+ document.getElementById('budgetForm').addEventListener('submit',saveBudget);
+}
+function populateBudget(id){
+ const b=state.budgets.find(b=>b.id===id);editingBudgetId=b?b.id:null;
+ document.getElementById('budgetChoice').value=b?String(b.id):'';
+ document.getElementById('budgetCategory').value=b?b.category:'';
+ document.getElementById('budgetLimit').value=b?b.monthly_limit:'';
+ document.getElementById('budgetThreshold').value=b?Math.round(b.warning_threshold*100):90;
+ document.getElementById('budgetError').textContent='';
+}
+async function openBudgetSettings(id){
+ try{await loadBudgets();document.getElementById('budgetChoice').innerHTML='<option value="">新增分类预算</option>'+state.budgets.map(b=>`<option value="${b.id}">${escapeHtml(b.category)}</option>`).join('');populateBudget(id);openModal('budgetModal');}catch(e){showToast(e.message);}
+}
+async function saveBudget(event){
+ event.preventDefault();const btn=document.getElementById('saveBudgetBtn'),error=document.getElementById('budgetError');if(btn.disabled)return;
+ const category=document.getElementById('budgetCategory').value.trim(),monthlyLimit=Number(document.getElementById('budgetLimit').value),warningThreshold=Number(document.getElementById('budgetThreshold').value)/100;
+ if(!category||!Number.isFinite(monthlyLimit)||monthlyLimit<=0||!Number.isFinite(warningThreshold)||warningThreshold<.01||warningThreshold>1){error.textContent='请填写分类、正数预算及1%至100%的阈值';return;}
+ btn.disabled=true;error.textContent='';try{
+  await api('/app/fm/api/budgets'+(editingBudgetId===null?'':'/'+editingBudgetId),{method:editingBudgetId===null?'POST':'PUT',body:JSON.stringify({category,monthlyLimit,warningThreshold})});
+  closeModal('budgetModal');await loadBudgets();showToast('预算已保存到数据库');
+ }catch(e){error.textContent=e.message;showToast(e.message);}finally{btn.disabled=false;}
 }

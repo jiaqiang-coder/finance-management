@@ -1,5 +1,5 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
-const nodes=new Map();const node=()=>({textContent:'',innerHTML:'',closest(){return this},querySelector(){return this},value:''});
+const nodes=new Map();const node=()=>({querySelectorAll(){return []},textContent:'',innerHTML:'',closest(){return this},querySelector(){return this},value:''});
 const get=s=>{if(!nodes.has(s))nodes.set(s,node());return nodes.get(s)};
 const lists=new Map();const many=s=>{if(!lists.has(s))lists.set(s,Array.from({length:s.includes('accounts-summary')?3:4},node));return lists.get(s)};
 const context={console,Intl,Date,document:{querySelector:get,querySelectorAll:many,getElementById:get},window:{},fetch:async()=>{throw Error('Unexpected network')}};
@@ -22,4 +22,12 @@ get('accountName').value=' ';await vm.runInContext(`saveAccount({preventDefault(
 get('accountName').value='失败测试';vm.runInContext(`api=async()=>{throw Error('网络失败')}`,context);await vm.runInContext(`saveAccount({preventDefault(){}})`,context);assert.equal(get('accountError').textContent,'网络失败');assert.equal(get('saveAccountBtn').disabled,false);
 get('saveAccountBtn').disabled=true;await vm.runInContext(`saveAccount({preventDefault(){}})`,context);assert.equal(get('saveAccountBtn').disabled,true);
 console.log('PASS account form: valid payload; whitespace rejected; request error shown; retry enabled; duplicate submission blocked');
+context.__calls=[];get('saveBudgetBtn').disabled=false;
+for(const [id,val] of Object.entries({budgetCategory:'交通出行',budgetLimit:'500',budgetThreshold:'80'}))get(id).value=val;
+vm.runInContext(`loadBudgets=async()=>{};editingBudgetId=null;api=async(url,opt)=>{__calls.push({url,method:opt.method,...JSON.parse(opt.body)});return {id:2}};`,context);
+await vm.runInContext(`saveBudget({preventDefault(){}})`,context);assert.equal(context.__calls[0].method,'POST');assert.equal(context.__calls[0].warningThreshold,.8);
+vm.runInContext(`editingBudgetId=2`,context);get('budgetLimit').value='600';await vm.runInContext(`saveBudget({preventDefault(){}})`,context);assert.equal(context.__calls[1].url,'/app/fm/api/budgets/2');assert.equal(context.__calls[1].method,'PUT');
+get('budgetLimit').value='0';await vm.runInContext(`saveBudget({preventDefault(){}})`,context);assert.equal(context.__calls.length,2);
+get('budgetLimit').value='600';vm.runInContext(`api=async()=>{throw Error('预算保存失败')}`,context);await vm.runInContext(`saveBudget({preventDefault(){}})`,context);assert.equal(get('budgetError').textContent,'预算保存失败');assert.equal(get('saveBudgetBtn').disabled,false);
+console.log('PASS budget form: create/edit payload, percent conversion, invalid amount blocked, failure shown and retry enabled');
 })().catch(e=>{console.error(e);process.exitCode=1});

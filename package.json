@@ -1,12 +1,12 @@
 {
   "name": "hengzi-personal-finance",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "衡资个人资产与现金流管理应用",
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js && node --check public/app.js",
-    "test": "node --check server.js && node --check public/app.js && node tests/test_frontend.cjs && python3 tests/test_persistence.py && python3 tests/test_fx.py"
+    "test": "node --check server.js && node --check public/app.js && node tests/test_frontend.cjs && python3 tests/test_persistence.py && python3 tests/test_fx.py && python3 tests/test_budgets.py"
   },
   "engines": {
     "node": ">=22.5.0"

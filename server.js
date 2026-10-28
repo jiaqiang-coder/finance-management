@@ -230,6 +230,10 @@ function safeEqual(a, b) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
+function currentBudgetMonth(){
+ const today=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});const [y,m]=today.split('-').map(Number);return [today.slice(0,7)+'-01',today.slice(0,7)+'-'+String(new Date(Date.UTC(y,m,0)).getUTCDate()).padStart(2,'0')];
+}
+
 function monthRange(period) {
   if (period === 'week') return ['2026-10-22', '2026-10-28'];
   return ['2026-10-01', '2026-10-31'];
@@ -395,16 +399,23 @@ async function api(req, res, pathname, searchParams) {
   if (pathname === '/api/budgets' && req.method === 'GET') {
     const budgets = db.prepare(`
       SELECT b.*, COALESCE(SUM(t.expense_amount), 0) AS spent
-      FROM budgets b LEFT JOIN transactions t ON t.category = b.category AND t.occurred_on BETWEEN '2026-10-01' AND '2026-10-31'
+      FROM budgets b LEFT JOIN transactions t ON t.category = b.category AND t.occurred_on BETWEEN ? AND ?
       GROUP BY b.id ORDER BY b.monthly_limit DESC
-    `).all();
+    `).all(...currentBudgetMonth());
     return json(res, 200, { budgets });
   }
-  if (pathname.startsWith('/api/budgets/') && req.method === 'PUT') {
-    const id = Number(pathname.split('/').pop());
-    const body = await readBody(req);
-    db.prepare('UPDATE budgets SET monthly_limit = ?, warning_threshold = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(Number(body.monthlyLimit), Number(body.warningThreshold || .9), id);
-    return json(res, 200, { ok: true });
+  if ((pathname==='/api/budgets' && req.method==='POST') || (/^\/api\/budgets\/\d+$/.test(pathname) && req.method==='PUT')) {
+    const id=req.method==='PUT'?Number(pathname.split('/').pop()):null;
+    const existing=id===null?null:db.prepare('SELECT * FROM budgets WHERE id=?').get(id);
+    if(id!==null&&!existing)return json(res,404,{error:'预算不存在'});
+    const b=await readBody(req),category=typeof b.category==='string'?b.category.trim():existing?.category;
+    const threshold=b.warningThreshold===undefined?.9:b.warningThreshold;
+    if(!category||category.length>100||typeof b.monthlyLimit!=='number'||!Number.isFinite(b.monthlyLimit)||b.monthlyLimit<=0||typeof threshold!=='number'||!Number.isFinite(threshold)||threshold<.01||threshold>1)return json(res,400,{error:'请填写分类、正数月度预算和1%至100%的预警阈值'});
+    const conflict=db.prepare('SELECT id FROM budgets WHERE category=?').get(category);
+    if(conflict&&conflict.id!==id)return json(res,409,{error:'该分类已有预算，请编辑现有预算'});
+    if(id===null){const result=db.prepare('INSERT INTO budgets(category,monthly_limit,warning_threshold) VALUES (?,?,?)').run(category,b.monthlyLimit,threshold);return json(res,201,{id:Number(result.lastInsertRowid)});}
+    db.prepare('UPDATE budgets SET category=?,monthly_limit=?,warning_threshold=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(category,b.monthlyLimit,threshold,id);
+    return json(res,200,{ok:true,id});
   }
   if (pathname === '/api/reports' && req.method === 'GET') return json(res, 200, getReport(searchParams.get('period') || 'month'));
   if (pathname === '/api/import/preview' && req.method === 'POST') {
