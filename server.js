@@ -129,6 +129,69 @@ function seed() {
 }
 // 演示数据初始化已禁用
 
+
+// Daily official ECB reference rates. Existing accounts keep manual valuation mode.
+for(const [name,type] of [['fx_mode',"TEXT NOT NULL DEFAULT 'manual'"],['fx_rate','REAL'],['fx_updated_at','TEXT']]){
+ if(!db.prepare('PRAGMA table_info(accounts)').all().some(c=>c.name===name))db.exec(`ALTER TABLE accounts ADD COLUMN ${name} ${type}`);
+}
+db.exec(`CREATE TABLE IF NOT EXISTS fx_cache(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS fx_history(quoted_on TEXT PRIMARY KEY,usd_cny REAL NOT NULL,hkd_cny REAL NOT NULL,fetched_at TEXT NOT NULL,source TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS fx_jobs(day TEXT PRIMARY KEY,status TEXT NOT NULL,attempted_at TEXT NOT NULL,message TEXT);`);
+let fxPending=null,lastFxAttempt=0;
+const FX_SOURCE='欧洲中央银行 ECB';
+function shanghaiDay(ms=Date.now()){return new Date(ms).toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});}
+function cachedFx(){const row=db.prepare('SELECT payload FROM fx_cache WHERE id=1').get();return row?JSON.parse(row.payload):null;}
+function parseEcb(xml){
+ const date=xml.match(/\btime\s*=\s*["'](\d{4}-\d{2}-\d{2})["']/)?.[1],rates={};
+ for(const tag of xml.matchAll(/<(?:\w+:)?Cube\b[^>]*>/g)){
+  const c=tag[0].match(/\bcurrency\s*=\s*["']([A-Z]{3})["']/)?.[1];
+  const v=tag[0].match(/\brate\s*=\s*["']([0-9.]+)["']/)?.[1];if(c&&v)rates[c]=Number(v);
+ }
+ if(!date||!['USD','HKD','CNY'].every(k=>Number.isFinite(rates[k])&&rates[k]>0))throw Error('官方汇率内容不完整');
+ return {quotedAt:date,rates:{CNY:1,USD:rates.CNY/rates.USD,HKD:rates.CNY/rates.HKD}};
+}
+async function getFx(force=false){
+ const cached=cachedFx();if(cached&&shanghaiDay(cached.fetchedAt)===shanghaiDay()&&!force)return cached;
+ if(fxPending)return fxPending;
+ if(Date.now()-lastFxAttempt<60000){if(cached)return {...cached,stale:true,warning:'刷新频率受限，请稍后重试'};throw Error('汇率暂不可用，请稍后重试或选择手动折算');}
+ lastFxAttempt=Date.now();
+ fxPending=(async()=>{try{
+  const response=await fetch('https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml',{signal:AbortSignal.timeout(10000)});
+  if(!response.ok)throw Error('官方接口暂不可用');
+  const parsed=parseEcb(await response.text()),prev=cachedFx();
+  if(prev&&parsed.quotedAt<prev.quotedAt)throw Error('官方返回较旧报价，保留现有汇率');
+  const value={...parsed,source:FX_SOURCE,sourceUrl:'https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html',frequency:'每日同步；周末及休市日沿用最近交易日参考汇率',fetchedAt:Date.now(),stale:false};
+  db.exec('BEGIN');try{
+   db.prepare('INSERT INTO fx_cache(id,payload) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(JSON.stringify(value));
+   db.prepare('INSERT INTO fx_history VALUES (?,?,?,?,?) ON CONFLICT(quoted_on) DO UPDATE SET usd_cny=excluded.usd_cny,hkd_cny=excluded.hkd_cny,fetched_at=excluded.fetched_at').run(value.quotedAt,value.rates.USD,value.rates.HKD,new Date(value.fetchedAt).toISOString(),FX_SOURCE);
+   db.exec('COMMIT');
+  }catch(e){db.exec('ROLLBACK');throw e;}
+  return value;
+ }catch(e){if(cached){const fallback={...cached,stale:true,warning:'官方同步失败，保留上次报价',lastAttemptAt:Date.now()};db.prepare('UPDATE fx_cache SET payload=? WHERE id=1').run(JSON.stringify(fallback));return fallback;}throw Error('无法取得官方汇率，请稍后重试或选择手动折算');}finally{fxPending=null;}})();return fxPending;
+}
+async function revalueAccounts(force=false){
+ if(!force&&!db.prepare("SELECT id FROM accounts WHERE fx_mode='auto' AND currency!='CNY' LIMIT 1").get())return null;
+ const fx=await getFx(force);if(fx.stale)return fx;
+ db.exec('BEGIN');try{for(const c of ['USD','HKD'])db.prepare("UPDATE accounts SET value_cny=ROUND(original_value*?,2),fx_rate=?,fx_updated_at=? WHERE fx_mode='auto' AND currency=?").run(fx.rates[c],fx.rates[c],fx.quotedAt,c);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}return fx;
+}
+async function accountInput(b){
+ const mode=b.fxMode||'manual',currency=b.currency||'CNY';
+ if(typeof b.name!=='string'||!b.name.trim()||!['asset','liability'].includes(b.kind)||!['CNY','USD','HKD'].includes(currency)||!['auto','manual'].includes(mode))throw Error('账户名称、性质、币种或折算模式无效');
+ const original=b.originalValue===undefined?Number(b.valueCny):b.originalValue;
+ if(typeof original!=='number'||!Number.isFinite(original)||original<0)throw Error('原币金额无效');
+ let value=b.valueCny,rate=null,quoted=null;
+ if(mode==='auto'){if(currency==='CNY'){value=original;rate=1;}else{const fx=await getFx();if(fx.stale)throw Error('当前无法更新官方汇率，请重试或选择手动折算');rate=fx.rates[currency];value=Math.round(original*rate*100)/100;quoted=fx.quotedAt;}}
+ if(typeof value!=='number'||!Number.isFinite(value)||value<0)throw Error('人民币价值无效');
+ return {name:b.name.trim(),kind:b.kind,category:String(b.category||'其他'),currency,value,original,mode,rate,quoted,note:String(b.note||'')};
+}
+async function dailyFx(){
+ const day=shanghaiDay(),clock=new Date().toLocaleTimeString('en-GB',{timeZone:'Asia/Shanghai',hour12:false});
+ if(clock<'01:10:00'||db.prepare('SELECT day FROM fx_jobs WHERE day=?').get(day))return;
+ db.prepare('INSERT INTO fx_jobs VALUES (?,?,?,?)').run(day,'running',new Date().toISOString(),'');
+ try{const fx=await revalueAccounts(true);db.prepare('UPDATE fx_jobs SET status=?,message=? WHERE day=?').run(fx.stale?'failed':'success',fx.warning||'同步成功',day);}catch(e){db.prepare('UPDATE fx_jobs SET status=?,message=? WHERE day=?').run('failed',e.message,day);}
+}
+setInterval(()=>dailyFx().catch(()=>{}),60000).unref();
+
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => {
     const index = part.indexOf('=');
@@ -286,14 +349,29 @@ async function api(req, res, pathname, searchParams) {
     res.setHeader('Set-Cookie', 'hz_session=; HttpOnly; SameSite=Strict; Secure; Path=/app/fm; Max-Age=0');
     return json(res, 200, { ok: true });
   }
-  if (pathname === '/api/summary' && req.method === 'GET') return json(res, 200, getSummary());
-  if (pathname === '/api/accounts' && req.method === 'GET') return json(res, 200, { accounts: db.prepare('SELECT * FROM accounts ORDER BY kind, value_cny DESC').all() });
-  if (pathname === '/api/accounts' && req.method === 'POST') {
-    const body = await readBody(req);
-    if (!body.name || !['asset', 'liability'].includes(body.kind)) return json(res, 400, { error: '账户名称或类型无效' });
-    const result = db.prepare(`INSERT INTO accounts (name, kind, category, currency, value_cny, original_value, update_method, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(body.name, body.kind, body.category || '其他', body.currency || 'CNY', Number(body.valueCny) || 0, Number(body.originalValue) || Number(body.valueCny) || 0, body.updateMethod || '手动更新', body.note || '');
-    return json(res, 201, { id: Number(result.lastInsertRowid) });
+  if (pathname === '/api/fx/history' && req.method === 'GET') return json(res,200,{history:db.prepare('SELECT * FROM fx_history ORDER BY quoted_on DESC LIMIT 90').all(),jobs:db.prepare('SELECT * FROM fx_jobs ORDER BY day DESC LIMIT 7').all(),schedule:'每天北京时间 01:10 自动同步；服务器停机后恢复会补跑当天任务'});
+  if (pathname === '/api/fx' && ['GET','POST'].includes(req.method)) {
+    try {const fx=req.method==='POST'?await revalueAccounts(true):await getFx();return json(res,200,fx);}
+    catch(e){return json(res,503,{error:e.message});}
+  }
+  if (pathname === '/api/summary' && req.method === 'GET') {
+    let warning=null;try{await revalueAccounts();}catch(e){warning=e.message;}
+    return json(res,200,{...getSummary(),fxWarning:warning});
+  }
+  if (pathname === '/api/accounts' && req.method === 'GET') {
+    let fx=null,warning=null;try{fx=await revalueAccounts();}catch(e){warning=e.message;}
+    return json(res,200,{accounts:db.prepare('SELECT * FROM accounts ORDER BY kind,value_cny DESC').all(),fx,fxWarning:warning});
+  }
+  if ((pathname==='/api/accounts' && req.method==='POST') || (/^\/api\/accounts\/\d+$/.test(pathname) && req.method==='PUT')) {
+    const id=req.method==='PUT'?Number(pathname.split('/').pop()):null;
+    if(id!==null&&!db.prepare('SELECT id FROM accounts WHERE id=?').get(id))return json(res,404,{error:'账户不存在'});
+    let a;try{a=await accountInput(await readBody(req));}catch(e){return json(res,400,{error:e.message});}
+    if(id===null){
+      const result=db.prepare('INSERT INTO accounts(name,kind,category,currency,value_cny,original_value,update_method,note,fx_mode,fx_rate,fx_updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(a.name,a.kind,a.category,a.currency,a.value,a.original,a.mode==='auto'?'自动汇率':'手动更新',a.note,a.mode,a.rate,a.quoted);
+      return json(res,201,{id:Number(result.lastInsertRowid)});
+    }
+    db.prepare('UPDATE accounts SET name=?,kind=?,category=?,currency=?,value_cny=?,original_value=?,update_method=?,note=?,fx_mode=?,fx_rate=?,fx_updated_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(a.name,a.kind,a.category,a.currency,a.value,a.original,a.mode==='auto'?'自动汇率':'手动更新',a.note,a.mode,a.rate,a.quoted,id);
+    return json(res,200,{ok:true,id});
   }
   if (pathname === '/api/transactions' && req.method === 'GET') {
     const type = searchParams.get('type');
@@ -392,6 +470,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
+  dailyFx().catch(()=>{});
   console.log(`衡资已启动：http://127.0.0.1:${PORT}`);
   if (APP_PASSWORD === 'hengzi-demo') console.log('开发登录密码：hengzi-demo（可通过 APP_PASSWORD 修改）');
 });

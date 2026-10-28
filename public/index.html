@@ -360,7 +360,7 @@
 <button class="nav-button" data-view="transactions"><i data-lucide="list-filter"></i><span>收支流水</span></button>
 <button class="nav-button" data-view="budgets"><i data-lucide="gauge"></i><span>预算预警</span></button>
 <button class="nav-button" data-view="reports"><i data-lucide="chart-no-axes-combined"></i><span>分析报告</span></button>
-</nav>
+<button class="nav-button" data-view="fx">汇率管理</button></nav>
 <div class="sidebar-foot"><div class="sync">等待数据加载</div></div>
 </aside>
 <main class="main">
@@ -402,7 +402,6 @@
 <article class="card section-card">
 <div class="section-head">
 <div><h2>净资产趋势</h2><p>过去 12 个月 · 人民币本位币</p></div>
-
 </div>
 <div aria-label="净资产趋势折线图" class="chart-wrap">暂无历史数据，暂不展示趋势</div>
 </article>
@@ -434,7 +433,7 @@
 </div>
 <article class="card table-wrap">
 <table id="accountsTable">
-<thead><tr><th>账户 / 资产</th><th>类型</th><th>币种</th><th>更新方式</th><th class="num">当前价值</th><th class="num">本月变化</th></tr></thead>
+<thead><tr><th>账户 / 资产</th><th>类型</th><th>币种</th><th>更新方式</th><th class="num">当前价值</th><th class="num">操作</th></tr></thead>
 <tbody></tbody>
 </table>
 </article>
@@ -473,7 +472,7 @@
 </div>
 <div class="grid two-col">
 <article class="card section-card">
-<div class="section-head"><div><h2>收支趋势</h2><p id="reportSubtitle">等待报告加载</p></div></div>
+<div class="section-head"><div><h2>收支趋势</h2><p id="reportSubtitle">等待报告加载</p></div><span class="tag good" id="reportSavings">—</span></div>
 <div aria-label="本月收入与支出趋势" class="chart-wrap">暂无历史数据，暂不展示趋势</div>
 </article>
 <article class="card section-card">
@@ -486,7 +485,7 @@
 <article class="card section-card"><h2>本期洞察</h2><p>暂无历史估值数据，暂不提供此分析</p></article>
 </div>
 </section>
-</div>
+<section class="view" id="fxView"><article class="card section-card"><div class="section-head"><div><h2>每日参考汇率</h2><p>1 单位外币折合人民币；用于资产估值，不代表银行成交价。</p></div><button class="btn" id="refreshFxBtn">立即同步</button></div><p id="fxStatus" role="status">等待加载</p><div id="fxRates"></div><p><a href="https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html" rel="noopener" target="_blank">数据来源：欧洲中央银行 ECB</a> · 根据欧元参考汇率交叉计算</p><p>每天北京时间 01:10 自动同步。周末及休市日沿用最近交易日报价。</p></article><article class="card section-card" style="margin-top:16px"><h2>汇率历史（最近 90 个报价日）</h2><div id="fxHistory">暂无记录</div><h2>最近自动同步记录</h2><div id="fxJobs">暂无记录</div></article></section></div>
 </main>
 </div>
 <nav aria-label="移动端导航" class="mobile-nav">
@@ -495,7 +494,7 @@
 <button data-view="transactions"><i data-lucide="list-filter"></i><span>流水</span></button>
 <button data-view="budgets"><i data-lucide="gauge"></i><span>预算</span></button>
 <button data-view="reports"><i data-lucide="chart-no-axes-combined"></i><span>报告</span></button>
-</nav>
+<button class="" data-view="fx">汇率管理</button></nav>
 <div aria-labelledby="addModalTitle" aria-modal="true" class="modal-backdrop" id="addModal" role="dialog">
 <div class="modal">
 <div class="modal-head"><h2 id="addModalTitle">记一笔</h2><button aria-label="关闭" class="close" data-close="addModal"><i data-lucide="x"></i></button></div>
@@ -540,123 +539,7 @@
 </div>
 <div aria-live="polite" class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
-<script id="prototypeScript" type="application/json">
-    const titles = { dashboard: '资产总览', accounts: '资产账户', transactions: '收支流水', budgets: '预算预警', reports: '分析报告' };
-    const allNavButtons = document.querySelectorAll('[data-view]');
-    function switchView(name) {
-      document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === name + 'View'));
-      allNavButtons.forEach(button => button.classList.toggle('active', button.dataset.view === name));
-      document.getElementById('pageTitle').textContent = titles[name];
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-    allNavButtons.forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
-    document.querySelectorAll('[data-jump]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.jump)));
 
-    function openModal(id) { document.getElementById(id).classList.add('open'); }
-    function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-    document.getElementById('addBtn').addEventListener('click', () => openModal('addModal'));
-    document.getElementById('importBtn').addEventListener('click', () => openModal('importModal'));
-    document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => closeModal(button.dataset.close)));
-    document.querySelectorAll('.modal-backdrop').forEach(backdrop => backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(backdrop.id); }));
-
-    let entryType = 'expense';
-    document.querySelectorAll('[data-entry]').forEach(button => button.addEventListener('click', () => {
-      entryType = button.dataset.entry;
-      document.querySelectorAll('[data-entry]').forEach(item => item.classList.toggle('active', item === button));
-    }));
-    function showToast(message) {
-      const toast = document.getElementById('toast');
-      toast.textContent = message;
-      toast.classList.add('show');
-      clearTimeout(window.toastTimer);
-      window.toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
-    }
-    document.getElementById('saveEntry').addEventListener('click', () => {
-      const amount = document.getElementById('entryAmount').value.trim();
-      const merchant = document.getElementById('entryMerchant').value.trim();
-      if (!amount || !merchant) { showToast('请填写金额和交易方'); return; }
-      const labels = { expense: '支出', income: '收入', transfer: '转账', trade: '证券交易' };
-      const signed = entryType === 'expense' ? '- ' : entryType === 'income' ? '+ ' : '';
-      const row = document.createElement('tr');
-      row.dataset.type = entryType;
-      row.innerHTML = '<td>10月28日</td><td><strong>' + merchant.replace(/[<>]/g, '') + '</strong><br><small>刚刚新增</small></td><td>' + document.getElementById('entryCategory').value + '</td><td>' + document.getElementById('entryAccount').value + '</td><td><span class="tag">' + labels[entryType] + '</span></td><td class="num ' + (entryType === 'expense' ? 'down' : entryType === 'income' ? 'up' : '') + '">' + signed + '¥' + Number(amount).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</td>';
-      document.querySelector('#transactionsTable tbody').prepend(row);
-      closeModal('addModal');
-      document.getElementById('entryAmount').value = '';
-      document.getElementById('entryMerchant').value = '';
-      showToast('流水已保存到本地演示数据');
-      switchView('transactions');
-    });
-
-    let importStep = 1;
-    let sampleReady = false;
-    function renderImportStep() {
-      document.querySelectorAll('[data-import-step]').forEach(panel => panel.classList.toggle('hidden', Number(panel.dataset.importStep) !== importStep));
-      document.querySelectorAll('[data-step-indicator]').forEach(indicator => {
-        const step = Number(indicator.dataset.stepIndicator);
-        indicator.classList.toggle('active', step === importStep);
-        indicator.classList.toggle('done', step < importStep);
-      });
-      document.getElementById('importPrev').disabled = importStep === 1;
-      const next = document.getElementById('importNext');
-      next.disabled = importStep === 1 && !sampleReady;
-      next.textContent = importStep === 3 ? '确认导入 118 条' : '下一步';
-    }
-    document.getElementById('chooseSample').addEventListener('click', () => {
-      sampleReady = true;
-      document.getElementById('sampleChosen').classList.remove('hidden');
-      renderImportStep();
-    });
-    document.getElementById('importPrev').addEventListener('click', () => { if (importStep > 1) { importStep--; renderImportStep(); } });
-    document.getElementById('importNext').addEventListener('click', () => {
-      if (importStep < 3) { importStep++; renderImportStep(); return; }
-      closeModal('importModal');
-      showToast('已导入 118 条，重复记录已自动跳过');
-      importStep = 1; sampleReady = false;
-      document.getElementById('sampleChosen').classList.add('hidden');
-      renderImportStep();
-      switchView('transactions');
-    });
-
-    document.getElementById('accountSearch').addEventListener('input', event => {
-      const keyword = event.target.value.toLowerCase();
-      document.querySelectorAll('#accountsTable tbody tr').forEach(row => row.hidden = !row.textContent.toLowerCase().includes(keyword));
-    });
-    function filterTransactions() {
-      const keyword = document.getElementById('transactionSearch').value.toLowerCase();
-      const type = document.getElementById('transactionType').value;
-      document.querySelectorAll('#transactionsTable tbody tr').forEach(row => {
-        row.hidden = !row.textContent.toLowerCase().includes(keyword) || (type !== 'all' && row.dataset.type !== type);
-      });
-    }
-    document.getElementById('transactionSearch').addEventListener('input', filterTransactions);
-    document.getElementById('transactionType').addEventListener('change', filterTransactions);
-
-    function downloadCsv() {
-      const csv = '\uFEFF日期,交易方,分类,账户,类型,金额\n2026-10-28,盒马鲜生,日常消费,支付宝,支出,-286.40\n2026-10-27,基金分红,投资收入,招商银行,收入,1248.00\n2026-10-25,建设银行房贷,利息支出,建设银行,还款,-12160.00';
-      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-      const a = document.createElement('a'); a.href = url; a.download = '衡资-流水导出.csv'; a.click(); URL.revokeObjectURL(url);
-      showToast('流水 CSV 已导出');
-    }
-    document.getElementById('exportTransactions').addEventListener('click', downloadCsv);
-    document.getElementById('exportReport').addEventListener('click', () => showToast('报告导出演示：正式版将生成 PDF / XLSX'));
-
-    const reportData = {
-      week: { income: '¥ 1,248', expense: '¥ 3,426', rate: '-174.5%', subtitle: '10月22日 — 10月28日' },
-      month: { income: '¥ 46,800', expense: '¥ 28,340', rate: '39.4%', subtitle: '10月1日 — 10月28日' }
-    };
-    document.querySelectorAll('[data-period]').forEach(button => button.addEventListener('click', () => {
-      document.querySelectorAll('[data-period]').forEach(item => item.classList.toggle('active', item === button));
-      const data = reportData[button.dataset.period];
-      document.getElementById('reportIncome').textContent = data.income;
-      document.getElementById('reportExpense').textContent = data.expense;
-      document.getElementById('reportRate').textContent = data.rate;
-      document.getElementById('reportSubtitle').textContent = data.subtitle;
-    }));
-
-    renderImportStep();
-    if (window.lucide) lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
-  </script>
-<script src="/app/fm/app.js?v=accounts-20261028"></script>
+<script src="/app/fm/app.js?v=fx-daily-edit-20261028"></script>
 </body>
 </html>

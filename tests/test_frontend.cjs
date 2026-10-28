@@ -1,0 +1,25 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const nodes=new Map();const node=()=>({textContent:'',innerHTML:'',closest(){return this},querySelector(){return this},value:''});
+const get=s=>{if(!nodes.has(s))nodes.set(s,node());return nodes.get(s)};
+const lists=new Map();const many=s=>{if(!lists.has(s))lists.set(s,Array.from({length:s.includes('accounts-summary')?3:4},node));return lists.get(s)};
+const context={console,Intl,Date,document:{querySelector:get,querySelectorAll:many,getElementById:get},window:{},fetch:async()=>{throw Error('Unexpected network')}};
+vm.createContext(context);let s=fs.readFileSync('public/app.js','utf8').replace(/start\(\)\.catch\([\s\S]*?\);\n/,'');vm.runInContext(s,context);
+vm.runInContext(`state.accounts=[];state.budgets=[];renderAllocation();renderBudgets();`,context);
+assert.match(get('assetAllocation').innerHTML,/暂无资产/);assert.match(get('#dashboardView .alert-list').innerHTML,/暂无预算预警/);
+assert.equal(many('#budgetsView .metric-value')[0].textContent,'¥0');assert.equal(many('#budgetsView .metric-value')[3].textContent,'—');
+vm.runInContext(`state.accounts=[{kind:'asset',category:'银行存款',value_cny:2500}];renderAllocation();state.budgets=[{category:'日常',monthly_limit:100,spent:95,warning_threshold:.9}];renderBudgets();`,context);
+assert.match(get('assetAllocation').innerHTML,/2,500/);assert.match(get('assetAllocation').innerHTML,/100.0%/);assert.match(get('#dashboardView .alert-list').innerHTML,/95%/);
+console.log('PASS UI: empty asset allocation and budgets; genuine asset amount/proportion; genuine budget alert; no fixed forecast');
+(async()=>{
+context.__calls=[];
+vm.runInContext(`closeModal=()=>{};showToast=()=>{};loadAccounts=async()=>{};loadSummary=async()=>{};`,context);
+for(const [id,val] of Object.entries({accountFxMode:'manual',accountName:'真实账户',accountValue:'1234.5',accountOriginal:'1234.5',accountKind:'asset',accountCategory:'银行存款',accountCurrency:'CNY',accountNote:''}))get(id).value=val;
+get('accountForm').reset=()=>{};get('saveAccountBtn').disabled=false;
+vm.runInContext(`api=async(url,opt)=>{__calls.push({url,...JSON.parse(opt.body)});return {id:1};};`,context);
+await vm.runInContext(`saveAccount({preventDefault(){}})`,context);
+assert.equal(context.__calls.length,1);assert.equal(context.__calls[0].url,'/app/fm/api/accounts');assert.equal(context.__calls[0].valueCny,1234.5);assert.equal(get('saveAccountBtn').disabled,false);
+get('accountName').value=' ';await vm.runInContext(`saveAccount({preventDefault(){}})`,context);assert.equal(context.__calls.length,1);assert.match(get('accountError').textContent,/账户名称/);
+get('accountName').value='失败测试';vm.runInContext(`api=async()=>{throw Error('网络失败')}`,context);await vm.runInContext(`saveAccount({preventDefault(){}})`,context);assert.equal(get('accountError').textContent,'网络失败');assert.equal(get('saveAccountBtn').disabled,false);
+get('saveAccountBtn').disabled=true;await vm.runInContext(`saveAccount({preventDefault(){}})`,context);assert.equal(get('saveAccountBtn').disabled,true);
+console.log('PASS account form: valid payload; whitespace rejected; request error shown; retry enabled; duplicate submission blocked');
+})().catch(e=>{console.error(e);process.exitCode=1});

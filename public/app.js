@@ -1,5 +1,7 @@
+var editingAccountId = null;
 const titles = {
   dashboard: '资产总览',
+  fx:'汇率管理',
   accounts: '资产账户',
   transactions: '收支流水',
   budgets: '预算预警',
@@ -55,6 +57,7 @@ function switchView(name) {
   document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === name));
   document.getElementById('pageTitle').textContent = titles[name];
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (name === 'fx') loadFxManagement().catch(e=>showToast(e.message));
   if (name === 'accounts') loadAccounts();
   if (name === 'transactions') loadTransactions();
   if (name === 'budgets') loadBudgets();
@@ -95,6 +98,8 @@ function accountIcon(category) {
 async function loadAccounts() {
   const payload = await api('/app/fm/api/accounts');
   state.accounts = payload.accounts;
+  if(payload.fxWarning)showToast(payload.fxWarning);
+  if(payload.fx?.stale)showToast(payload.fx.warning||'当前使用上次汇率估值');
   const tbody = document.querySelector('#accountsTable tbody');
   tbody.innerHTML = state.accounts.map(account => {
     const [label, tone] = accountIcon(account.category);
@@ -102,10 +107,10 @@ async function loadAccounts() {
     return `<tr>
       <td><div class="account-cell"><i class="account-icon ${tone}"><span>${label}</span></i><div><strong>${escapeHtml(account.name)}</strong><small>${escapeHtml(account.note)}</small></div></div></td>
       <td><span class="tag ${account.kind === 'liability' ? 'warn' : ''}">${escapeHtml(account.category)}</span></td>
-      <td>${escapeHtml(account.currency)}</td>
-      <td>${escapeHtml(account.update_method)}</td>
+      <td>${escapeHtml(account.currency)}<br><small>${Number(account.original_value).toLocaleString('zh-CN')}</small></td>
+      <td>${escapeHtml(account.update_method)}${account.fx_mode==='auto'&&account.fx_rate?`<br><small>汇率 ${Number(account.fx_rate).toFixed(6)} · ${escapeHtml(account.fx_updated_at||'')}</small>`:''}</td>
       <td class="num ${value < 0 ? 'down' : ''}">${money.format(value)}</td>
-      <td class="num">—</td>
+      <td class="num"><button class="btn" data-edit-account="${account.id}">编辑</button></td>
     </tr>`;
   }).join('');
   const assetTotal = state.accounts.filter(account => account.kind === 'asset').reduce((sum, account) => sum + account.value_cny, 0);
@@ -115,6 +120,7 @@ async function loadAccounts() {
   summaryValues[0].textContent = money.format(assetTotal - propertyTotal);
   summaryValues[1].textContent = money.format(propertyTotal);
   summaryValues[2].textContent = money.format(liabilityTotal);
+  document.querySelectorAll('[data-edit-account]').forEach(btn=>btn.addEventListener('click',()=>openAccountEditor(Number(btn.dataset.editAccount))));
   renderAllocation();
   fillAccountSelect();
 }
@@ -317,6 +323,7 @@ async function start() {
   const now=new Date();
   document.querySelector('.page-kicker').textContent=now.toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'long',day:'numeric',weekday:'long'});
   document.getElementById('entryDate').value=now.toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});
+  editingAccountId=null;
   setupAccountForm();
   bindEvents();
   refreshIcons();
@@ -351,13 +358,14 @@ function setupAccountForm() {
  <div class="field"><label for="accountCategory">分类</label><select id="accountCategory"><option>银行存款</option><option>支付账户</option><option>房产</option><option>股票</option><option>基金</option><option>受限资产</option><option>债权</option><option>长期负债</option><option>流动负债</option><option>其他</option></select></div>
  <div class="field"><label for="accountCurrency">币种</label><select id="accountCurrency"><option>CNY</option><option>USD</option><option>HKD</option></select></div>
  <div class="field"><label for="accountOriginal">原币金额</label><input class="input" id="accountOriginal" type="number" min="0" step="0.01" required value="0"></div>
- <div class="field full"><label for="accountValue">人民币价值（手动折算）</label><input class="input" id="accountValue" type="number" min="0" step="0.01" required value="0"><small>资产和负债均填写正数；外币请手动填写人民币价值。</small></div>
+ <div class="field full"><label for="accountFxMode">折算方式</label><select id="accountFxMode"><option value="auto">官方每日汇率自动折算</option><option value="manual">手动填写人民币价值</option></select><small id="accountFxStatus" role="status"></small></div><div class="field full"><label for="accountValue">人民币价值</label><input class="input" id="accountValue" type="number" min="0" step="0.01" required value="0"><small>资产和负债均填写正数。自动模式由服务器按官方参考汇率折算。</small></div>
  <div class="field full"><label for="accountNote">备注</label><input class="input" id="accountNote" maxlength="500"></div>
  <p id="accountError" role="alert" style="color:#aa5144"></p>
  </div></div><div class="modal-foot"><button type="button" class="btn" data-close="accountModal">取消</button><button class="btn primary" type="submit" id="saveAccountBtn">保存账户</button></div></form></div>`;
  document.body.appendChild(modal);
- document.getElementById('addAccountBtn').addEventListener('click',()=>{document.getElementById('accountError').textContent='';openModal('accountModal');document.getElementById('accountName').focus();});
- document.getElementById('accountOriginal').addEventListener('input',e=>{if(document.getElementById('accountCurrency').value==='CNY')document.getElementById('accountValue').value=e.target.value;});
+ document.getElementById('addAccountBtn').addEventListener('click',()=>{editingAccountId=null;document.getElementById('accountForm').reset();document.getElementById('accountModalTitle').textContent='新增账户';document.getElementById('accountError').textContent='';openModal('accountModal');updateAccountFx().catch(e=>showToast(e.message));document.getElementById('accountName').focus();});
+ for(const id of ['accountOriginal','accountCurrency','accountFxMode'])document.getElementById(id).addEventListener(id==='accountOriginal'?'input':'change',()=>updateAccountFx().catch(e=>showToast(e.message)));
+ document.getElementById('refreshFxBtn').addEventListener('click',refreshFxManagement);
  document.getElementById('accountForm').addEventListener('submit',saveAccount);
 }
 async function saveAccount(event) {
@@ -369,8 +377,48 @@ async function saveAccount(event) {
  if(!name || !Number.isFinite(valueCny) || valueCny<0 || !Number.isFinite(originalValue) || originalValue<0){error.textContent='请填写账户名称和有效的非负金额';return;}
  btn.disabled=true;error.textContent='';
  try {
-  await api('/app/fm/api/accounts',{method:'POST',body:JSON.stringify({name,kind:document.getElementById('accountKind').value,category:document.getElementById('accountCategory').value,currency:document.getElementById('accountCurrency').value,valueCny,originalValue,updateMethod:'手动更新',note:document.getElementById('accountNote').value.trim()})});
+  await api('/app/fm/api/accounts'+(editingAccountId===null?'':'/'+editingAccountId),{method:editingAccountId===null?'POST':'PUT',body:JSON.stringify({name,kind:document.getElementById('accountKind').value,category:document.getElementById('accountCategory').value,currency:document.getElementById('accountCurrency').value,fxMode:document.getElementById('accountFxMode').value,valueCny,originalValue,updateMethod:'手动更新',note:document.getElementById('accountNote').value.trim()})});
   closeModal('accountModal');document.getElementById('accountForm').reset();
   await Promise.all([loadAccounts(),loadSummary()]);showToast('账户已保存到数据库');
  } catch(e){error.textContent=e.message;showToast(e.message);} finally{btn.disabled=false;}
+}
+
+function openAccountEditor(id){
+ const a=state.accounts.find(a=>a.id===id);if(!a)return;
+ editingAccountId=id;document.getElementById('accountModalTitle').textContent='编辑账户';
+ const categorySelect=document.getElementById('accountCategory');if(!Array.from(categorySelect.options).some(o=>o.value===a.category)){const option=document.createElement('option');option.value=a.category;option.textContent=a.category;categorySelect.appendChild(option);}
+ const fields={accountName:a.name,accountKind:a.kind,accountCategory:a.category,accountCurrency:a.currency,accountOriginal:a.original_value,accountValue:a.value_cny,accountNote:a.note,accountFxMode:a.fx_mode||'manual'};
+ for(const [key,value] of Object.entries(fields))document.getElementById(key).value=value;
+ document.getElementById('accountError').textContent='';openModal('accountModal');updateAccountFx().catch(e=>showToast(e.message));
+}
+
+var formFx=null,formFxPending=null,fxFormSequence=0;
+async function updateAccountFx(){
+ const seq=++fxFormSequence,c=document.getElementById('accountCurrency').value,mode=document.getElementById('accountFxMode').value;
+ const input=document.getElementById('accountValue'),status=document.getElementById('accountFxStatus');input.readOnly=mode==='auto';
+ if(mode==='manual'){status.textContent='使用手动填写值，不随每日汇率变化';return;}
+ const amount=Number(document.getElementById('accountOriginal').value);
+ if(c==='CNY'){input.value=Number.isFinite(amount)?amount:0;status.textContent='人民币无需换汇';return;}
+ status.textContent='正在获取官方汇率…';
+ try{
+  if(!formFx||formFx.stale||new Date(formFx.fetchedAt).toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'})!==new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'})){if(!formFxPending)formFxPending=api('/app/fm/api/fx').finally(()=>{formFxPending=null;});formFx=await formFxPending;}
+  if(seq!==fxFormSequence)return;
+  if(formFx.stale)throw Error(formFx.warning||'汇率更新失败，可选择手动折算');
+  input.value=(amount*formFx.rates[c]).toFixed(2);status.textContent=`1 ${c} = ${formFx.rates[c].toFixed(6)} CNY；报价日期 ${formFx.quotedAt}；${formFx.source}`;
+ }catch(e){if(seq===fxFormSequence)status.textContent=e.message;}
+}
+async function loadFxManagement(){
+ const status=document.getElementById('fxStatus');status.textContent='正在同步官方数据…';
+ try{
+  const fx=await api('/app/fm/api/fx');formFx=fx;
+  status.textContent=`${fx.stale?'同步异常，保留旧报价：'+(fx.warning||''):'已同步'}；官方报价日期 ${fx.quotedAt}；最近获取 ${new Date(fx.fetchedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}（北京时间）`;
+  document.getElementById('fxRates').innerHTML=['USD','HKD'].map(c=>`<p><strong>1 ${c} = ${Number(fx.rates[c]).toFixed(6)} CNY</strong></p>`).join('');
+ }catch(e){status.textContent=e.message;}
+ const history=await api('/app/fm/api/fx/history');
+ document.getElementById('fxHistory').innerHTML=history.history.length?`<table><thead><tr><th>报价日期</th><th>USD/CNY</th><th>HKD/CNY</th></tr></thead><tbody>${history.history.map(r=>`<tr><td>${escapeHtml(r.quoted_on)}</td><td>${Number(r.usd_cny).toFixed(6)}</td><td>${Number(r.hkd_cny).toFixed(6)}</td></tr>`).join('')}</tbody></table>`:'暂无记录';
+ document.getElementById('fxJobs').innerHTML=history.jobs.length?history.jobs.map(j=>`<p>${escapeHtml(j.day)} · ${escapeHtml({running:'进行中',failed:'失败',success:'成功'}[j.status]||j.status)} · ${escapeHtml(j.message||'')}</p>`).join(''):'暂无自动同步记录';
+}
+async function refreshFxManagement(){
+ const btn=document.getElementById('refreshFxBtn');if(btn.disabled)return;btn.disabled=true;
+ try{const fx=await api('/app/fm/api/fx',{method:'POST',body:'{}'});formFx=fx;await Promise.all([loadAccounts(),loadSummary()]);await loadFxManagement();showToast(fx.stale?(fx.warning||'同步失败，保留原值'):'汇率已同步，自动折算账户已更新');}catch(e){document.getElementById('fxStatus').textContent=e.message;showToast(e.message);}finally{btn.disabled=false;}
 }
