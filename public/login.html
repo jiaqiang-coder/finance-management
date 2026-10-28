@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · 衡资</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f6f3;color:#1d211d;font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:0;padding:20px}.shell{width:min(920px,100%);display:grid;grid-template-columns:1.15fr .85fr;background:#fff;border:1px solid #dde2dc;border-radius:8px;overflow:hidden;box-shadow:0 18px 60px rgba(28,42,31,.12)}.intro{padding:56px;background:#202720;color:#f2f5f1}.mark{width:46px;height:46px;display:grid;place-items:center;border-radius:8px;background:#d8e9df;color:#183d2c;font-weight:800;font-size:21px}.intro h1{font-size:35px;margin:28px 0 12px}.intro p{color:#bec8bf;line-height:1.7;margin:0;max-width:430px}.points{display:grid;gap:13px;margin-top:40px}.points span{display:flex;align-items:center;gap:10px;color:#dce3dc;font-size:14px}.points i{width:8px;height:8px;border-radius:50%;background:#76c898}.form{padding:56px 42px;display:flex;flex-direction:column;justify-content:center}.form h2{margin:0 0 7px;font-size:22px}.form>p{margin:0 0 28px;color:#697068;font-size:13px}.field{display:grid;gap:7px}.field label{font-size:13px;font-weight:650}.field input{height:44px;border:1px solid #ccd3cc;border-radius:6px;padding:0 12px;font:inherit;font-size:16px}.field input:focus{outline:3px solid rgba(52,107,157,.2);border-color:#346b9d}.submit{margin-top:14px;height:44px;border:0;border-radius:6px;background:#1d211d;color:#fff;font:inherit;font-weight:650;cursor:pointer}.submit:disabled{opacity:.6}.error{min-height:20px;margin:10px 0 0;color:#aa5144;font-size:12px}.hint{margin-top:24px;padding:12px;background:#eef1ed;border-radius:6px;color:#697068;font-size:12px;line-height:1.6}@media(max-width:700px){.shell{grid-template-columns:1fr}.intro{padding:28px}.intro h1{font-size:26px;margin:18px 0 8px}.points{display:none}.form{padding:32px 28px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="intro"><div class="mark">衡</div><h1>看清每一笔资产</h1><p>把投资持仓、房产、现金账户、债权与负债放进同一张个人资产负债表。</p><div class="points"><span><i></i>资产、负债与净值统一管理</span><span><i></i>支出、转账和还款准确区分</span><span><i></i>预算预警与周月报告</span></div></section>
+    <section class="form"><h2>登录衡资</h2><p>请输入个人访问密码</p><form id="loginForm"><div class="field"><label for="password">访问密码</label><input id="password" type="password" autocomplete="current-password" autofocus required></div><p class="error" id="error" role="alert"></p><button class="submit" id="submit" type="submit">进入账户</button></form><div class="hint">本地开发默认密码：<strong>hengzi-demo</strong><br>正式部署前请通过环境变量修改。</div></section>
+  </main>
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = document.getElementById('submit');
+      const error = document.getElementById('error');
+      button.disabled = true; error.textContent = '';
+      try {
+        const response = await fetch('/app/fm/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('password').value }) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '登录失败');
+        location.href = '/app/fm/';
+      } catch (reason) { error.textContent = reason.message; button.disabled = false; }
+    });
+  </script>
+</body>
+</html>

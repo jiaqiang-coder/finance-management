@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<title>衡资 · 个人资产管理</title>
+<style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f3;
+      --surface: #ffffff;
+      --surface-soft: #eef1ed;
+      --ink: #1d211d;
+      --muted: #697068;
+      --line: #dde2dc;
+      --green: #276847;
+      --green-soft: #e0eee6;
+      --blue: #346b9d;
+      --blue-soft: #e3edf5;
+      --amber: #a9741f;
+      --amber-soft: #f7edd7;
+      --red: #aa5144;
+      --red-soft: #f7e5e2;
+      --shadow: 0 8px 30px rgba(28, 42, 31, .08);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+      letter-spacing: 0;
+    }
+    button, input, select { font: inherit; letter-spacing: 0; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(52, 107, 157, .25);
+      outline-offset: 2px;
+    }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 16px;
+      background: #202720;
+      color: #f2f5f1;
+      display: flex;
+      flex-direction: column;
+      z-index: 20;
+    }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 24px; }
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: #d8e9df;
+      color: #183d2c;
+      font-weight: 800;
+    }
+    .brand strong { display: block; font-size: 17px; }
+    .brand small { color: #abb6ac; }
+    .nav { display: grid; gap: 5px; }
+    .nav-button {
+      width: 100%;
+      min-height: 44px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #c4cec5;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      padding: 0 12px;
+      text-align: left;
+    }
+    .nav-button svg { width: 18px; height: 18px; }
+    .nav-button:hover { background: rgba(255,255,255,.06); color: #fff; }
+    .nav-button.active { background: #dcebe2; color: #173c2a; font-weight: 650; }
+    .sidebar-foot { margin-top: auto; padding: 14px 8px 0; border-top: 1px solid rgba(255,255,255,.12); }
+    .sync { display: flex; align-items: center; gap: 8px; color: #b9c5ba; font-size: 12px; }
+    .sync::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #74c99a; }
+
+    .main { min-width: 0; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 15;
+      height: 72px;
+      padding: 0 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(221,226,220,.9);
+      background: rgba(244,246,243,.92);
+      backdrop-filter: blur(12px);
+    }
+    .page-kicker { margin: 0 0 3px; color: var(--muted); font-size: 12px; }
+    .page-title { margin: 0; font-size: 21px; line-height: 1.2; font-weight: 700; }
+    .top-actions { display: flex; gap: 8px; }
+    .btn {
+      min-height: 40px;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-weight: 650;
+    }
+    .btn:hover { border-color: #aab4aa; }
+    .btn.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .btn.primary:hover { background: #303730; }
+    .btn.ghost { background: transparent; }
+    .btn.icon { width: 40px; padding: 0; }
+    .btn svg { width: 17px; height: 17px; }
+
+    .content { padding: 26px 32px 44px; max-width: 1480px; margin: 0 auto; }
+    .view { display: none; }
+    .view.active { display: block; animation: reveal .22s ease-out; }
+    @keyframes reveal { from { opacity: .2; transform: translateY(4px); } }
+    .grid { display: grid; gap: 16px; }
+    .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .two-col { grid-template-columns: minmax(0, 1.5fr) minmax(290px, .8fr); margin-top: 16px; }
+    .two-even { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 16px; }
+    .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+    .metric { padding: 18px; min-height: 132px; display: flex; flex-direction: column; justify-content: space-between; }
+    .metric-label { color: var(--muted); font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+    .metric-value { font-size: clamp(24px, 2.2vw, 34px); line-height: 1; font-weight: 750; font-variant-numeric: tabular-nums; }
+    .metric-foot { font-size: 12px; color: var(--muted); }
+    .up { color: var(--green); }
+    .down { color: var(--red); }
+    .section-card { padding: 20px; }
+    .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+    .section-head h2 { margin: 0 0 4px; font-size: 16px; }
+    .section-head p { margin: 0; color: var(--muted); font-size: 12px; }
+    .link-btn { padding: 0; border: 0; background: transparent; color: var(--blue); font-weight: 650; }
+    .chart-wrap { height: 258px; position: relative; }
+    .chart-wrap svg { width: 100%; height: 100%; overflow: visible; }
+    .axis-label { font-size: 11px; fill: #80877f; }
+    .chart-grid { stroke: #e6e9e5; stroke-width: 1; }
+    .chart-line { fill: none; stroke: var(--green); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .chart-area { fill: url(#areaFill); }
+    .chart-dot { fill: #fff; stroke: var(--green); stroke-width: 3; }
+    .donut-layout { display: grid; grid-template-columns: 148px 1fr; align-items: center; gap: 22px; }
+    .donut {
+      width: 148px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: conic-gradient(var(--green) 0 34%, var(--blue) 34% 57%, var(--amber) 57% 78%, #7f6fa6 78% 91%, #b9c1b9 91% 100%);
+      position: relative;
+    }
+    .donut::after { content: ""; position: absolute; inset: 28px; border-radius: 50%; background: var(--surface); }
+    .legend { display: grid; gap: 10px; }
+    .legend-row { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
+    .swatch { width: 9px; height: 9px; border-radius: 2px; }
+    .legend-row span:last-child { font-variant-numeric: tabular-nums; font-weight: 650; }
+
+    .alert-list, .activity-list { display: grid; gap: 10px; }
+    .alert-item { padding: 12px; display: grid; grid-template-columns: 34px 1fr; gap: 11px; background: var(--amber-soft); border-radius: 6px; }
+    .alert-item.danger { background: var(--red-soft); }
+    .alert-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 6px; background: rgba(255,255,255,.65); color: var(--amber); }
+    .alert-item.danger .alert-icon { color: var(--red); }
+    .alert-item strong { display: block; font-size: 13px; margin-bottom: 3px; }
+    .alert-item p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .activity { display: grid; grid-template-columns: 38px 1fr auto; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }
+    .activity:last-child { border: 0; }
+    .activity-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 6px; background: var(--surface-soft); color: var(--muted); }
+    .activity strong, .activity span { display: block; font-size: 13px; }
+    .activity small { color: var(--muted); font-size: 11px; }
+    .activity-amount { text-align: right; font-variant-numeric: tabular-nums; font-weight: 650; }
+
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+    .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .search { position: relative; }
+    .search svg { position: absolute; left: 11px; top: 11px; width: 17px; height: 17px; color: var(--muted); }
+    .input, .select {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink);
+      padding: 0 11px;
+    }
+    .search .input { width: 230px; padding-left: 36px; }
+    .select { min-width: 124px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th { padding: 12px 14px; text-align: left; color: var(--muted); background: #f7f8f6; font-size: 11px; font-weight: 650; }
+    td { padding: 14px; border-top: 1px solid var(--line); font-size: 13px; vertical-align: middle; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    tbody tr:hover { background: #fafbf9; }
+    .account-cell { display: flex; align-items: center; gap: 10px; }
+    .account-icon { width: 34px; height: 34px; border-radius: 6px; display: grid; place-items: center; background: var(--green-soft); color: var(--green); }
+    .account-icon.blue { background: var(--blue-soft); color: var(--blue); }
+    .account-icon.amber { background: var(--amber-soft); color: var(--amber); }
+    .account-icon.red { background: var(--red-soft); color: var(--red); }
+    .tag { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border-radius: 999px; background: var(--surface-soft); color: var(--muted); font-size: 11px; font-weight: 650; }
+    .tag.warn { background: var(--amber-soft); color: #815915; }
+    .tag.good { background: var(--green-soft); color: var(--green); }
+    .accounts-summary { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 16px; }
+    .accounts-summary > div { background: var(--surface); padding: 18px; }
+    .accounts-summary span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 7px; }
+    .accounts-summary strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+
+    .budget-list { display: grid; gap: 12px; }
+    .budget-row { padding: 16px 18px; display: grid; grid-template-columns: minmax(130px, .7fr) minmax(220px, 1.5fr) 170px; gap: 20px; align-items: center; }
+    .budget-name { display: flex; align-items: center; gap: 10px; }
+    .budget-name i { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 6px; background: var(--surface-soft); color: var(--muted); }
+    .budget-name strong { display: block; font-size: 13px; }
+    .budget-name small { color: var(--muted); }
+    .progress { height: 8px; background: #e9ece8; border-radius: 999px; overflow: hidden; margin: 7px 0; }
+    .progress > span { display: block; height: 100%; border-radius: inherit; background: var(--green); }
+    .progress.warn > span { background: var(--amber); }
+    .progress.danger > span { background: var(--red); }
+    .budget-meta { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11px; }
+    .budget-number { text-align: right; }
+    .budget-number strong { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+    .budget-number small { color: var(--muted); }
+
+    .segmented { display: inline-flex; padding: 3px; background: var(--surface-soft); border-radius: 6px; }
+    .segment { min-height: 34px; padding: 0 13px; border: 0; border-radius: 4px; color: var(--muted); background: transparent; font-weight: 650; }
+    .segment.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .report-summary { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 16px; }
+    .report-summary > div { background: var(--surface); padding: 18px; }
+    .report-summary span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .report-summary strong { font-size: 24px; font-variant-numeric: tabular-nums; }
+    .bar-list { display: grid; gap: 15px; }
+    .bar-row { display: grid; grid-template-columns: 90px 1fr 80px; gap: 12px; align-items: center; font-size: 12px; }
+    .bar-track { height: 10px; background: #edf0ec; border-radius: 3px; overflow: hidden; }
+    .bar { height: 100%; background: var(--blue); border-radius: 3px; }
+    .bar-row:nth-child(2) .bar { background: var(--amber); }
+    .bar-row:nth-child(3) .bar { background: var(--green); }
+    .bar-row:nth-child(4) .bar { background: #7f6fa6; }
+    .bar-row .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(16,22,17,.42); display: none; align-items: center; justify-content: center; padding: 18px; }
+    .modal-backdrop.open { display: flex; }
+    .modal { width: min(560px, 100%); max-height: calc(100vh - 36px); overflow: auto; background: var(--surface); border-radius: 8px; box-shadow: var(--shadow); }
+    .modal.wide { width: min(760px, 100%); }
+    .modal-head { padding: 18px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+    .modal-head h2 { margin: 0; font-size: 17px; }
+    .modal-body { padding: 20px; }
+    .modal-foot { padding: 14px 20px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
+    .close { width: 36px; height: 36px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); display: grid; place-items: center; }
+    .close:hover { background: var(--surface-soft); }
+    .form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+    .field { display: grid; gap: 6px; }
+    .field.full { grid-column: 1 / -1; }
+    .field label { font-size: 12px; font-weight: 650; }
+    .field input, .field select { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 6px; padding: 0 11px; background: #fff; }
+    .type-switch { display: grid; grid-template-columns: repeat(4,1fr); gap: 7px; }
+    .type-switch button { min-height: 40px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--muted); }
+    .type-switch button.active { background: var(--green-soft); color: var(--green); border-color: #b7d4c3; font-weight: 650; }
+    .import-steps { display: grid; grid-template-columns: repeat(3,1fr); margin-bottom: 22px; }
+    .step { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .step:not(:last-child)::after { content: ""; height: 1px; background: var(--line); flex: 1; margin-right: 8px; }
+    .step-index { flex: 0 0 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-soft); font-weight: 700; }
+    .step.active, .step.done { color: var(--green); }
+    .step.active .step-index, .step.done .step-index { background: var(--green); color: #fff; }
+    .dropzone { border: 1px dashed #aeb8ae; border-radius: 7px; padding: 30px 18px; text-align: center; background: #fafbf9; }
+    .dropzone svg { width: 30px; height: 30px; color: var(--green); margin-bottom: 8px; }
+    .dropzone strong { display: block; margin-bottom: 5px; }
+    .dropzone p { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
+    .mapping { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; margin-bottom: 10px; }
+    .mapping code { padding: 10px; background: var(--surface-soft); border-radius: 5px; font-size: 12px; }
+    .mapping select { min-height: 38px; border: 1px solid var(--line); border-radius: 5px; padding: 0 8px; }
+    .review-box { padding: 14px; border-radius: 6px; background: var(--green-soft); display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin-bottom: 14px; }
+    .review-box span { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+    .review-box strong { font-size: 18px; }
+    .hidden { display: none !important; }
+    .toast { position: fixed; right: 24px; bottom: 24px; z-index: 200; padding: 13px 16px; border-radius: 6px; background: #202720; color: #fff; box-shadow: var(--shadow); transform: translateY(20px); opacity: 0; pointer-events: none; transition: .2s; }
+    .toast.show { transform: none; opacity: 1; }
+    .mobile-nav { display: none; }
+
+    @media (max-width: 1100px) {
+      .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .two-col { grid-template-columns: 1fr; }
+      .budget-row { grid-template-columns: minmax(130px,.7fr) minmax(200px,1.3fr) 130px; }
+    }
+    @media (max-width: 760px) {
+      .app { display: block; }
+      .sidebar { display: none; }
+      .topbar { height: 64px; padding: 0 16px; }
+      .page-kicker { display: none; }
+      .page-title { font-size: 18px; }
+      .top-actions .btn span { display: none; }
+      .top-actions .btn { width: 40px; padding: 0; }
+      .content { padding: 16px 14px 92px; }
+      .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+      .metric { min-height: 116px; padding: 14px; }
+      .metric-value { font-size: 23px; }
+      .two-even { grid-template-columns: 1fr; }
+      .section-card { padding: 15px; }
+      .donut-layout { grid-template-columns: 124px 1fr; gap: 15px; }
+      .donut { width: 124px; }
+      .toolbar { align-items: stretch; flex-direction: column; }
+      .toolbar-left, .toolbar-right { width: 100%; }
+      .search { flex: 1; }
+      .search .input { width: 100%; }
+      .accounts-summary, .report-summary { grid-template-columns: 1fr; }
+      .accounts-summary > div, .report-summary > div { padding: 14px 16px; }
+      .budget-row { grid-template-columns: 1fr; gap: 12px; }
+      .budget-number { text-align: left; display: flex; align-items: baseline; gap: 7px; }
+      .form-grid { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+      .type-switch { grid-template-columns: repeat(2,1fr); }
+      .import-steps .step-label { display: none; }
+      .mapping { grid-template-columns: 1fr; }
+      .mapping > span { display: none; }
+      .review-box { grid-template-columns: 1fr; }
+      .mobile-nav {
+        position: fixed;
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        z-index: 50;
+        height: 66px;
+        padding: 5px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255,255,255,.95);
+        box-shadow: var(--shadow);
+        display: grid;
+        grid-template-columns: repeat(5,1fr);
+        backdrop-filter: blur(12px);
+      }
+      .mobile-nav button { border: 0; background: transparent; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10px; border-radius: 5px; }
+      .mobile-nav button.active { background: var(--green-soft); color: var(--green); font-weight: 650; }
+      .mobile-nav svg { width: 18px; height: 18px; }
+      .toast { left: 14px; right: 14px; bottom: 88px; text-align: center; }
+    }
+    @media (max-width: 420px) {
+      .metrics { grid-template-columns: 1fr; }
+      .metric { min-height: 106px; }
+      .donut-layout { grid-template-columns: 1fr; justify-items: center; }
+      .legend { width: 100%; }
+      .bar-row { grid-template-columns: 68px 1fr 68px; gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+<aside aria-label="主导航" class="sidebar">
+<div class="brand">
+<div class="brand-mark">衡</div>
+<div><strong>衡资</strong><small>个人资产管理</small></div>
+</div>
+<nav class="nav">
+<button class="nav-button active" data-view="dashboard"><i data-lucide="layout-dashboard"></i><span>总览</span></button>
+<button class="nav-button" data-view="accounts"><i data-lucide="landmark"></i><span>资产账户</span></button>
+<button class="nav-button" data-view="transactions"><i data-lucide="list-filter"></i><span>收支流水</span></button>
+<button class="nav-button" data-view="budgets"><i data-lucide="gauge"></i><span>预算预警</span></button>
+<button class="nav-button" data-view="reports"><i data-lucide="chart-no-axes-combined"></i><span>分析报告</span></button>
+</nav>
+<div class="sidebar-foot"><div class="sync">等待数据加载</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+<div>
+<p class="page-kicker"></p>
+<h1 class="page-title" id="pageTitle">资产总览</h1>
+</div>
+<div class="top-actions">
+<button class="btn" id="importBtn"><i data-lucide="file-up"></i><span>批量导入</span></button>
+<button class="btn primary" id="addBtn"><i data-lucide="plus"></i><span>记一笔</span></button>
+</div>
+</header>
+<div class="content">
+<section class="view active" id="dashboardView">
+<div class="grid metrics">
+<article class="card metric">
+<div class="metric-label"><span>净资产</span><i data-lucide="wallet-cards"></i></div>
+<div class="metric-value">—</div>
+<div class="metric-foot">等待数据加载</div>
+</article>
+<article class="card metric">
+<div class="metric-label"><span>总资产</span><i data-lucide="building-2"></i></div>
+<div class="metric-value">—</div>
+<div class="metric-foot">等待数据加载</div>
+</article>
+<article class="card metric">
+<div class="metric-label"><span>总负债</span><i data-lucide="receipt-text"></i></div>
+<div class="metric-value">—</div>
+<div class="metric-foot">等待数据加载</div>
+</article>
+<article class="card metric">
+<div class="metric-label"><span>本月可支配</span><i data-lucide="circle-dollar-sign"></i></div>
+<div class="metric-value">—</div>
+<div class="metric-foot">等待数据加载</div>
+</article>
+</div>
+<div class="grid two-col">
+<article class="card section-card">
+<div class="section-head">
+<div><h2>净资产趋势</h2><p>过去 12 个月 · 人民币本位币</p></div>
+
+</div>
+<div aria-label="净资产趋势折线图" class="chart-wrap">暂无历史数据，暂不展示趋势</div>
+</article>
+<article class="card section-card">
+<div class="section-head"><div><h2>资产配置</h2><p>按当前折算市值</p></div><button class="link-btn" data-jump="accounts">查看账户</button></div>
+<div class="donut-layout" id="assetAllocation">等待账户数据加载</div>
+</article>
+</div>
+<div class="grid two-even">
+<article class="card section-card">
+<div class="section-head"><div><h2>需要关注</h2><p>预算、账单与资产提醒</p></div><button class="link-btn" data-jump="budgets">全部提醒</button></div>
+<div class="alert-list">暂无提醒</div>
+</article>
+<article class="card section-card">
+<div class="section-head"><div><h2>最近流水</h2><p>已排除账户间转账</p></div><button class="link-btn" data-jump="transactions">全部流水</button></div>
+<div class="activity-list" id="recentActivity">暂无记录</div>
+</article>
+</div>
+</section>
+<section class="view" id="accountsView">
+<div class="accounts-summary">
+<div><span>流动资产</span><strong>—</strong></div>
+<div><span>非流动资产</span><strong>—</strong></div>
+<div><span>负债合计</span><strong class="down">—</strong></div>
+</div>
+<div class="toolbar">
+<div class="toolbar-left"><div class="search"><i data-lucide="search"></i><input class="input" id="accountSearch" placeholder="搜索账户或资产"/></div><select class="select"><option>全部类型</option><option>现金账户</option><option>投资资产</option><option>负债</option></select></div>
+<button class="btn" id="addAccountBtn"><i data-lucide="plus"></i>新增账户</button>
+</div>
+<article class="card table-wrap">
+<table id="accountsTable">
+<thead><tr><th>账户 / 资产</th><th>类型</th><th>币种</th><th>更新方式</th><th class="num">当前价值</th><th class="num">本月变化</th></tr></thead>
+<tbody></tbody>
+</table>
+</article>
+</section>
+<section class="view" id="transactionsView">
+<div class="toolbar">
+<div class="toolbar-left"><div class="search"><i data-lucide="search"></i><input class="input" id="transactionSearch" placeholder="搜索交易方或备注"/></div><select class="select" id="transactionType"><option value="all">全部类型</option><option value="expense">支出</option><option value="income">收入</option><option value="transfer">转账</option></select><select class="select"><option>本月</option><option>上月</option><option>今年</option></select></div>
+<div class="toolbar-right"><button class="btn" id="exportTransactions"><i data-lucide="download"></i>导出</button></div>
+</div>
+<article class="card table-wrap">
+<table id="transactionsTable">
+<thead><tr><th>日期</th><th>交易方 / 事项</th><th>分类</th><th>账户</th><th>类型</th><th class="num">金额</th></tr></thead>
+<tbody></tbody>
+</table>
+</article>
+</section>
+<section class="view" id="budgetsView">
+<div class="grid metrics">
+<article class="card metric"><div class="metric-label"><span>本月总预算</span><i data-lucide="target"></i></div><div class="metric-value">—</div><div class="metric-foot">等待数据加载</div></article>
+<article class="card metric"><div class="metric-label"><span>已使用</span><i data-lucide="circle-gauge"></i></div><div class="metric-value">—</div><div class="metric-foot">等待数据加载</div></article>
+<article class="card metric"><div class="metric-label"><span>剩余额度</span><i data-lucide="shield-check"></i></div><div class="metric-value">—</div><div class="metric-foot">等待数据加载</div></article>
+<article class="card metric"><div class="metric-label"><span>预计月底</span><i data-lucide="scan-line"></i></div><div class="metric-value down">—</div><div class="metric-foot">等待数据加载</div></article>
+</div>
+<div class="toolbar" style="margin-top:16px"><div><strong>分类预算</strong><div style="color:var(--muted);font-size:12px;margin-top:3px">达到 70%、90% 和 100% 时提醒</div></div><button class="btn"><i data-lucide="settings-2"></i>预算设置</button></div>
+<div class="budget-list">等待数据加载</div>
+</section>
+<section class="view" id="reportsView">
+<div class="toolbar">
+<div aria-label="报告周期" class="segmented" role="group"><button class="segment" data-period="week">本周</button><button class="segment active" data-period="month">本月</button></div>
+<div class="toolbar-right"><button class="btn" id="exportReport"><i data-lucide="file-down"></i>导出报告</button></div>
+</div>
+<div class="report-summary">
+<div><span>期间收入</span><strong class="up" id="reportIncome">—</strong></div>
+<div><span>期间支出</span><strong class="down" id="reportExpense">—</strong></div>
+<div><span>结余率</span><strong id="reportRate">—</strong></div>
+</div>
+<div class="grid two-col">
+<article class="card section-card">
+<div class="section-head"><div><h2>收支趋势</h2><p id="reportSubtitle">等待报告加载</p></div></div>
+<div aria-label="本月收入与支出趋势" class="chart-wrap">暂无历史数据，暂不展示趋势</div>
+</article>
+<article class="card section-card">
+<div class="section-head"><div><h2>支出结构</h2><p>按消费分类，不含转账</p></div></div>
+<div class="bar-list">等待数据加载</div>
+</article>
+</div>
+<div class="grid two-even">
+<article class="card section-card"><h2>资产变化</h2><p>暂无历史估值数据，暂不提供此分析</p></article>
+<article class="card section-card"><h2>本期洞察</h2><p>暂无历史估值数据，暂不提供此分析</p></article>
+</div>
+</section>
+</div>
+</main>
+</div>
+<nav aria-label="移动端导航" class="mobile-nav">
+<button class="active" data-view="dashboard"><i data-lucide="layout-dashboard"></i><span>总览</span></button>
+<button data-view="accounts"><i data-lucide="landmark"></i><span>资产</span></button>
+<button data-view="transactions"><i data-lucide="list-filter"></i><span>流水</span></button>
+<button data-view="budgets"><i data-lucide="gauge"></i><span>预算</span></button>
+<button data-view="reports"><i data-lucide="chart-no-axes-combined"></i><span>报告</span></button>
+</nav>
+<div aria-labelledby="addModalTitle" aria-modal="true" class="modal-backdrop" id="addModal" role="dialog">
+<div class="modal">
+<div class="modal-head"><h2 id="addModalTitle">记一笔</h2><button aria-label="关闭" class="close" data-close="addModal"><i data-lucide="x"></i></button></div>
+<div class="modal-body">
+<div class="field full" style="margin-bottom:16px"><label>交易类型</label><div class="type-switch" id="entryTypes"><button class="active" data-entry="expense">支出</button><button data-entry="income">收入</button><button data-entry="transfer">转账</button><button data-entry="trade">证券交易</button></div></div>
+<div class="form-grid">
+<div class="field"><label for="entryAmount">金额</label><input id="entryAmount" inputmode="decimal" placeholder="0.00"/></div>
+<div class="field"><label for="entryDate">日期</label><input id="entryDate" type="date" value=""/></div>
+<div class="field"><label for="entryAccount">账户</label><select id="entryAccount"><option value="">未指定账户</option></select></div>
+<div class="field"><label for="entryCategory">分类</label><select id="entryCategory"><option>日常消费</option><option>居住</option><option>交通出行</option><option>工资</option><option>投资收入</option></select></div>
+<div class="field full"><label for="entryMerchant">交易方 / 事项</label><input id="entryMerchant" placeholder="例如：盒马鲜生"/></div>
+<div class="field full"><label for="entryNote">备注</label><input id="entryNote" placeholder="选填"/></div>
+</div>
+</div>
+<div class="modal-foot"><button class="btn ghost" data-close="addModal">取消</button><button class="btn primary" id="saveEntry">保存流水</button></div>
+</div>
+</div>
+<div aria-labelledby="importModalTitle" aria-modal="true" class="modal-backdrop" id="importModal" role="dialog">
+<div class="modal wide">
+<div class="modal-head"><h2 id="importModalTitle">批量导入账单</h2><button aria-label="关闭" class="close" data-close="importModal"><i data-lucide="x"></i></button></div>
+<div class="modal-body">
+<div class="import-steps"><div class="step active" data-step-indicator="1"><span class="step-index">1</span><span class="step-label">上传文件</span></div><div class="step" data-step-indicator="2"><span class="step-index">2</span><span class="step-label">字段映射</span></div><div class="step" data-step-indicator="3"><span class="step-index">3</span><span class="step-label">检查入账</span></div></div>
+<div data-import-step="1">
+<div class="dropzone"><i data-lucide="file-spreadsheet"></i><strong>拖入账单文件，或选择示例文件</strong><p>支持支付宝、微信、信用卡和通用 CSV / XLSX</p><button class="btn" id="chooseSample"><i data-lucide="folder-open"></i>选择示例账单</button></div>
+<div class="hidden" id="sampleChosen" style="margin-top:12px;padding:12px;background:var(--green-soft);border-radius:6px"></div>
+</div>
+<div class="hidden" data-import-step="2">
+<p style="margin-top:0;color:var(--muted);font-size:12px">已识别支付宝账单格式，请确认字段映射。</p>
+<div class="mapping"><code>交易时间</code><span>→</span><select><option>交易日期</option></select></div>
+<div class="mapping"><code>交易对方</code><span>→</span><select><option>交易方 / 事项</option></select></div>
+<div class="mapping"><code>金额（元）</code><span>→</span><select><option>金额</option></select></div>
+<div class="mapping"><code>收/支</code><span>→</span><select><option>交易类型</option></select></div>
+<div class="mapping"><code>交易状态</code><span>→</span><select><option>备注</option></select></div>
+</div>
+<div class="hidden" data-import-step="3">
+<div class="review-box"><div><span>有效记录</span><strong>0</strong></div><div><span>重复记录</span><strong>0</strong></div><div><span>需确认</span><strong>0</strong></div></div>
+<div class="table-wrap"><table><thead><tr><th>日期</th><th>交易方</th><th>识别结果</th><th class="num">金额</th></tr></thead><tbody></tbody></table></div>
+</div>
+</div>
+<div class="modal-foot"><button class="btn ghost" disabled="" id="importPrev">上一步</button><button class="btn primary" disabled="" id="importNext">下一步</button></div>
+</div>
+</div>
+<div aria-live="polite" class="toast" id="toast" role="status"></div>
+<script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+<script id="prototypeScript" type="application/json">
+    const titles = { dashboard: '资产总览', accounts: '资产账户', transactions: '收支流水', budgets: '预算预警', reports: '分析报告' };
+    const allNavButtons = document.querySelectorAll('[data-view]');
+    function switchView(name) {
+      document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === name + 'View'));
+      allNavButtons.forEach(button => button.classList.toggle('active', button.dataset.view === name));
+      document.getElementById('pageTitle').textContent = titles[name];
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    allNavButtons.forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
+    document.querySelectorAll('[data-jump]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.jump)));
+
+    function openModal(id) { document.getElementById(id).classList.add('open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+    document.getElementById('addBtn').addEventListener('click', () => openModal('addModal'));
+    document.getElementById('importBtn').addEventListener('click', () => openModal('importModal'));
+    document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => closeModal(button.dataset.close)));
+    document.querySelectorAll('.modal-backdrop').forEach(backdrop => backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(backdrop.id); }));
+
+    let entryType = 'expense';
+    document.querySelectorAll('[data-entry]').forEach(button => button.addEventListener('click', () => {
+      entryType = button.dataset.entry;
+      document.querySelectorAll('[data-entry]').forEach(item => item.classList.toggle('active', item === button));
+    }));
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(window.toastTimer);
+      window.toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
+    }
+    document.getElementById('saveEntry').addEventListener('click', () => {
+      const amount = document.getElementById('entryAmount').value.trim();
+      const merchant = document.getElementById('entryMerchant').value.trim();
+      if (!amount || !merchant) { showToast('请填写金额和交易方'); return; }
+      const labels = { expense: '支出', income: '收入', transfer: '转账', trade: '证券交易' };
+      const signed = entryType === 'expense' ? '- ' : entryType === 'income' ? '+ ' : '';
+      const row = document.createElement('tr');
+      row.dataset.type = entryType;
+      row.innerHTML = '<td>10月28日</td><td><strong>' + merchant.replace(/[<>]/g, '') + '</strong><br><small>刚刚新增</small></td><td>' + document.getElementById('entryCategory').value + '</td><td>' + document.getElementById('entryAccount').value + '</td><td><span class="tag">' + labels[entryType] + '</span></td><td class="num ' + (entryType === 'expense' ? 'down' : entryType === 'income' ? 'up' : '') + '">' + signed + '¥' + Number(amount).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '</td>';
+      document.querySelector('#transactionsTable tbody').prepend(row);
+      closeModal('addModal');
+      document.getElementById('entryAmount').value = '';
+      document.getElementById('entryMerchant').value = '';
+      showToast('流水已保存到本地演示数据');
+      switchView('transactions');
+    });
+
+    let importStep = 1;
+    let sampleReady = false;
+    function renderImportStep() {
+      document.querySelectorAll('[data-import-step]').forEach(panel => panel.classList.toggle('hidden', Number(panel.dataset.importStep) !== importStep));
+      document.querySelectorAll('[data-step-indicator]').forEach(indicator => {
+        const step = Number(indicator.dataset.stepIndicator);
+        indicator.classList.toggle('active', step === importStep);
+        indicator.classList.toggle('done', step < importStep);
+      });
+      document.getElementById('importPrev').disabled = importStep === 1;
+      const next = document.getElementById('importNext');
+      next.disabled = importStep === 1 && !sampleReady;
+      next.textContent = importStep === 3 ? '确认导入 118 条' : '下一步';
+    }
+    document.getElementById('chooseSample').addEventListener('click', () => {
+      sampleReady = true;
+      document.getElementById('sampleChosen').classList.remove('hidden');
+      renderImportStep();
+    });
+    document.getElementById('importPrev').addEventListener('click', () => { if (importStep > 1) { importStep--; renderImportStep(); } });
+    document.getElementById('importNext').addEventListener('click', () => {
+      if (importStep < 3) { importStep++; renderImportStep(); return; }
+      closeModal('importModal');
+      showToast('已导入 118 条，重复记录已自动跳过');
+      importStep = 1; sampleReady = false;
+      document.getElementById('sampleChosen').classList.add('hidden');
+      renderImportStep();
+      switchView('transactions');
+    });
+
+    document.getElementById('accountSearch').addEventListener('input', event => {
+      const keyword = event.target.value.toLowerCase();
+      document.querySelectorAll('#accountsTable tbody tr').forEach(row => row.hidden = !row.textContent.toLowerCase().includes(keyword));
+    });
+    function filterTransactions() {
+      const keyword = document.getElementById('transactionSearch').value.toLowerCase();
+      const type = document.getElementById('transactionType').value;
+      document.querySelectorAll('#transactionsTable tbody tr').forEach(row => {
+        row.hidden = !row.textContent.toLowerCase().includes(keyword) || (type !== 'all' && row.dataset.type !== type);
+      });
+    }
+    document.getElementById('transactionSearch').addEventListener('input', filterTransactions);
+    document.getElementById('transactionType').addEventListener('change', filterTransactions);
+
+    function downloadCsv() {
+      const csv = '\uFEFF日期,交易方,分类,账户,类型,金额\n2026-10-28,盒马鲜生,日常消费,支付宝,支出,-286.40\n2026-10-27,基金分红,投资收入,招商银行,收入,1248.00\n2026-10-25,建设银行房贷,利息支出,建设银行,还款,-12160.00';
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      const a = document.createElement('a'); a.href = url; a.download = '衡资-流水导出.csv'; a.click(); URL.revokeObjectURL(url);
+      showToast('流水 CSV 已导出');
+    }
+    document.getElementById('exportTransactions').addEventListener('click', downloadCsv);
+    document.getElementById('exportReport').addEventListener('click', () => showToast('报告导出演示：正式版将生成 PDF / XLSX'));
+
+    const reportData = {
+      week: { income: '¥ 1,248', expense: '¥ 3,426', rate: '-174.5%', subtitle: '10月22日 — 10月28日' },
+      month: { income: '¥ 46,800', expense: '¥ 28,340', rate: '39.4%', subtitle: '10月1日 — 10月28日' }
+    };
+    document.querySelectorAll('[data-period]').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-period]').forEach(item => item.classList.toggle('active', item === button));
+      const data = reportData[button.dataset.period];
+      document.getElementById('reportIncome').textContent = data.income;
+      document.getElementById('reportExpense').textContent = data.expense;
+      document.getElementById('reportRate').textContent = data.rate;
+      document.getElementById('reportSubtitle').textContent = data.subtitle;
+    }));
+
+    renderImportStep();
+    if (window.lucide) lucide.createIcons({ attrs: { 'stroke-width': 1.8 } });
+  </script>
+<script src="/app/fm/app.js?v=accounts-20261028"></script>
+</body>
+</html>
