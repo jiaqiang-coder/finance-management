@@ -57,6 +57,7 @@ function switchView(name) {
   document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === name));
   document.getElementById('pageTitle').textContent = titles[name];
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (name === 'dashboard') loadTrend();
   if (name === 'fx') loadFxManagement().catch(e=>showToast(e.message));
   if (name === 'accounts') loadAccounts();
   if (name === 'transactions') loadTransactions();
@@ -328,13 +329,13 @@ async function start() {
   setupAccountForm();
   setupBudgetForm();
   bindEvents();
+  bindTrend();
   refreshIcons();
   renderImportStep();
-  await Promise.all([loadSummary(), loadAccounts(), loadTransactions(), loadBudgets()]);
+  await Promise.all([loadSummary(), loadAccounts(), loadTransactions(), loadBudgets(), loadTrend()]);
   document.querySelector('.sync').textContent='已从服务器读取数据';
 }
 
-start().catch(error => { document.querySelector('.sync').textContent='数据加载失败，请重试'; showToast(error.message); });
 
 function renderAllocation() {
  const groups={};
@@ -454,3 +455,75 @@ async function saveBudget(event){
   closeModal('budgetModal');await loadBudgets();showToast('预算已保存到数据库');
  }catch(e){error.textContent=e.message;showToast(e.message);}finally{btn.disabled=false;}
 }
+
+let trendData, trendRequest=0;
+const trendElement=id=>document.getElementById(id);
+const trendFormat=(value,currency)=>value==null?'暂无数据':new Intl.NumberFormat('zh-CN',{style:'currency',currency,maximumFractionDigits:2}).format(value);
+function bindTrend(){
+  for(const id of ['trendCurrency','trendMetric'])trendElement(id)?.addEventListener('change',renderTrend);
+  trendElement('trendDays')?.addEventListener('change',()=>loadTrend());
+  trendElement('trendDate')?.addEventListener('change',event=>loadTrend(event.target.value));
+}
+async function loadTrend(day){
+  const chart=trendElement('trendChart');
+  if(!chart)return;
+  const request=++trendRequest;
+  try{
+    const params=new URLSearchParams({days:trendElement('trendDays').value});
+    if(day)params.set('day',day);
+    const payload=await api('/app/fm/api/trend?'+params);
+    if(request!==trendRequest)return;
+    trendData=payload;
+    const date=trendElement('trendDate');
+    date.innerHTML=payload.points.map(point=>`<option value="${escapeHtml(point.day)}">${escapeHtml(point.day)}</option>`).join('');
+    date.value=payload.detail?.day||'';
+    trendElement('trendDateLabel').hidden=!payload.points.length;
+    renderTrend();
+  }catch(error){
+    if(request!==trendRequest)return;
+    trendData=null;
+    chart.textContent='趋势加载失败：'+error.message;
+    trendElement('trendToday').textContent='';
+    trendElement('trendDetail').textContent='';
+    trendElement('trendDateLabel').hidden=true;
+  }
+}
+function renderTrend(){
+  if(!trendData)return;
+  const currency=trendElement('trendCurrency').value,metric=trendElement('trendMetric').value;
+  const format=value=>trendFormat(value,currency);
+  const {points,detail,today,firstDay}=trendData;
+  trendElement('trendToday').textContent='今日（未结算）：'+format(today.totals[currency]?.[metric]);
+  const chart=trendElement('trendChart');
+  const values=points.map(point=>point.totals[currency]?.[metric]);
+  const available=values.filter(Number.isFinite);
+  if(!available.length){
+    chart.textContent=points.length?'暂无可用的折算汇率，未绘制这些日期。':'从 '+firstDay+' 开始记录，等待首个日终快照。';
+  }else{
+    const min=Math.min(...available),max=Math.max(...available),span=max-min;
+    const xy=(v,i)=>[22+596*(points.length===1?.5:i/(points.length-1)),span===0?75:20+110*(max-v)/span];
+    let paths=[],segment=[];
+    const dots=values.map((v,i)=>{
+      if(!Number.isFinite(v)){if(segment.length)paths.push(segment);segment=[];return '';}
+      const [x,y]=xy(v,i);segment.push(`${x},${y}`);
+      return `<circle cx="${x}" cy="${y}" r="4" fill="#346b9d"><title>${escapeHtml(points[i].day)} · ${escapeHtml(format(v))}</title></circle>`;
+    });
+    if(segment.length)paths.push(segment);
+    chart.innerHTML=`<svg viewBox="0 0 640 155" role="img" aria-label="日终趋势，详细金额可按日期选择" style="width:100%;max-height:220px"><path d="M22 20V138H618" stroke="#ccd3cc" fill="none"/>${paths.map(p=>`<polyline points="${p.join(' ')}" stroke="#346b9d" stroke-width="2" fill="none"/>`).join('')}${dots.join('')}</svg><div class="toolbar"><span>${escapeHtml(points[0].day)}</span><span>${escapeHtml(points.at(-1).day)}</span></div>`;
+  }
+  const panel=trendElement('trendDetail');
+  if(!detail){panel.textContent='';return;}
+  const change=points.find(point=>point.day===detail.day)?.changes?.[currency]?.[metric];
+  const usd=detail.fx?.rates.USD;
+  const rows=detail.items.filter(item=>metric==='netWorth'||item.kind===(metric==='assets'?'asset':'liability'));
+  panel.innerHTML=`<p><strong>${escapeHtml(detail.day)} 日终：${escapeHtml(format(detail.totals[currency]?.[metric]))}</strong></p>
+    <p>${change?`较前日 ${escapeHtml(format(change.delta))} · 汇率影响 ${escapeHtml(format(change.fxImpact))} · 其他变动 ${escapeHtml(format(change.otherChange))}`:'暂无可比较的上一日金额'}</p>
+    <p class="metric-foot">参考报价日：${escapeHtml(detail.fx?.quotedAt||'无')}。手动估值或无法匹配前日汇率的账户，其人民币估值变动计入其他变动；美元口径另包含人民币折美元的汇率影响。</p>
+    <ul>${rows.map(item=>{
+      const sign=metric==='netWorth'&&item.kind==='liability'?-1:1;
+      const amount=currency==='CNY'?sign*item.value_cny:usd>0?sign*item.value_cny/usd:null;
+      return `<li>${escapeHtml(item.name)} · ${escapeHtml(String(item.original_value))} ${escapeHtml(item.currency)} → ${escapeHtml(format(amount))}${item.fx_updated_at?' · 估值汇率日 '+escapeHtml(item.fx_updated_at):item.fx_mode==='manual'?' · 手动估值':''}</li>`;
+    }).join('')}</ul>`;
+}
+
+start().catch(error => { document.querySelector('.sync').textContent='数据加载失败，请重试'; showToast(error.message); });

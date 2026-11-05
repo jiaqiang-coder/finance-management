@@ -401,9 +401,17 @@
 <div class="grid two-col">
 <article class="card section-card">
 <div class="section-head">
-<div><h2>净资产趋势</h2><p>过去 12 个月 · 人民币本位币</p></div>
+<div><h2>日终资产趋势</h2><p>北京时间日终 · 从启用日起记录</p></div>
 </div>
-<div aria-label="净资产趋势折线图" class="chart-wrap">暂无历史数据，暂不展示趋势</div>
+<div class="toolbar">
+<label>币种 <select id="trendCurrency" class="select"><option value="CNY">人民币</option><option value="USD">美元</option></select></label>
+<label>指标 <select id="trendMetric" class="select"><option value="netWorth">净资产</option><option value="assets">总资产</option><option value="liabilities">总负债</option></select></label>
+<label>范围 <select id="trendDays" class="select"><option value="7">近 7 天</option><option value="30" selected>近 30 天</option><option value="90">近 90 天</option></select></label>
+</div>
+<div id="trendToday" aria-live="polite"></div>
+<div id="trendChart" class="chart-wrap" aria-label="日终资产趋势">等待加载</div>
+<label id="trendDateLabel" hidden>查看日终 <select id="trendDate" class="select"></select></label>
+<div id="trendDetail" aria-live="polite"></div>
 </article>
 <article class="card section-card">
 <div class="section-head"><div><h2>资产配置</h2><p>按当前折算市值</p></div><button class="link-btn" data-jump="accounts">查看账户</button></div>
@@ -540,6 +548,6 @@
 <div aria-live="polite" class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
 
-<script src="/app/fm/app.js?v=budget-settings-20261028"></script>
+<script src="/app/fm/app.js?v=daily-trend-20261105"></script>
 </body>
 </html>
