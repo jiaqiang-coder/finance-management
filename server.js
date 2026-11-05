@@ -10,7 +10,12 @@ const DATA_DIR = path.join(ROOT, 'data');
 const DB_PATH = path.join(DATA_DIR, 'hengzi.db');
 const PORT = Number(process.env.PORT || 4173);
 const BASE_PATH = '/app/fm';
-const APP_PASSWORD = process.env.APP_PASSWORD || 'hengzi-demo';
+const APP_PASSWORD = process.env.APP_PASSWORD;
+if (!APP_PASSWORD?.trim() ||
+    crypto.createHash('sha256').update(APP_PASSWORD.trim()).digest('hex') === '8469ff5c7f8b5aa893c75bc11b0b1571042b0ca5412fb64eb3df82b1348779a7') {
+  console.error('Set APP_PASSWORD to a private password; the old development password is not allowed.');
+  process.exit(1);
+}
 const sessions = new Map();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -603,5 +608,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   dailyFx().catch(()=>{});
   console.log(`衡资已启动：http://127.0.0.1:${PORT}`);
-  if (APP_PASSWORD === 'hengzi-demo') console.log('开发登录密码：hengzi-demo（可通过 APP_PASSWORD 修改）');
+
 });

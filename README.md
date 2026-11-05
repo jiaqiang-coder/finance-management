@@ -7,10 +7,12 @@ Node.js 22.5+；无需第三方 npm 依赖。
 ```bash
 git clone https://github.com/jiaqiang-coder/finance-management.git
 cd finance-management
-APP_PASSWORD="请换成强密码" npm start
+read -rsp '衡资访问密码: ' APP_PASSWORD; echo
+APP_PASSWORD="$APP_PASSWORD" npm start
+unset APP_PASSWORD
 ```
 
-未设置 APP_PASSWORD 时仍使用开发密码，正式部署必须设置强密码。默认监听 127.0.0.1:4173。访问路径为 /app/fm/，生产需通过 HTTPS 代理访问。
+必须提供独立的 APP_PASSWORD。未设置、留空或使用历史开发密码时，服务会拒绝启动。真实密码只保存在服务器配置中，请勿提交到 Git 或打包分享。默认监听 127.0.0.1:4173。访问路径为 /app/fm/，生产需通过 HTTPS 代理访问。
 
 ## 本次完善
 
