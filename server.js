@@ -192,6 +192,121 @@ async function dailyFx(){
 }
 setInterval(()=>dailyFx().catch(()=>{}),60000).unref();
 
+// Record the state actually saved before each Shanghai midnight.
+const DAY_MS = 86400000;
+const dayStart = day => Date.parse(day + 'T00:00:00+08:00');
+const changeDay = (day, offset) => shanghaiDay(dayStart(day) + offset * DAY_MS);
+const stampSql = "CAST(ROUND(unixepoch('subsec') * 1000) AS INTEGER)";
+function accountVersionJson(prefix) {
+  return "json_object(" + ['name','kind','category','currency','original_value','value_cny','fx_mode','fx_rate','fx_updated_at']
+    .map(key => "'"+key+"',"+prefix+key).join(',') + ")";
+}
+db.exec('BEGIN IMMEDIATE');
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS trend_config(id INTEGER PRIMARY KEY CHECK(id=1), first_day TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS account_versions(id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL, recorded_ms INTEGER NOT NULL, payload TEXT);
+    CREATE INDEX IF NOT EXISTS account_versions_lookup ON account_versions(account_id, recorded_ms DESC, id DESC);
+    CREATE TABLE IF NOT EXISTS fx_versions(id INTEGER PRIMARY KEY, recorded_ms INTEGER NOT NULL, payload TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS daily_snapshots(day TEXT PRIMARY KEY, cutoff_ms INTEGER NOT NULL, generated_at TEXT NOT NULL, payload TEXT NOT NULL);
+    CREATE TRIGGER IF NOT EXISTS version_account_insert AFTER INSERT ON accounts BEGIN
+      INSERT INTO account_versions(account_id,recorded_ms,payload) VALUES(NEW.id,${stampSql},${accountVersionJson('NEW.')});
+    END;
+    CREATE TRIGGER IF NOT EXISTS version_account_update AFTER UPDATE ON accounts
+    WHEN ${accountVersionJson('NEW.')} IS NOT ${accountVersionJson('OLD.')} BEGIN
+      INSERT INTO account_versions(account_id,recorded_ms,payload) VALUES(NEW.id,${stampSql},${accountVersionJson('NEW.')});
+    END;
+    CREATE TRIGGER IF NOT EXISTS version_account_delete AFTER DELETE ON accounts BEGIN
+      INSERT INTO account_versions(account_id,recorded_ms,payload) VALUES(OLD.id,${stampSql},NULL);
+    END;
+    CREATE TRIGGER IF NOT EXISTS version_fx_insert AFTER INSERT ON fx_cache BEGIN
+      INSERT INTO fx_versions(recorded_ms,payload) VALUES(${stampSql},NEW.payload);
+    END;
+    CREATE TRIGGER IF NOT EXISTS version_fx_update AFTER UPDATE ON fx_cache
+    WHEN json_extract(NEW.payload,'$.fetchedAt') IS NOT json_extract(OLD.payload,'$.fetchedAt') BEGIN
+      INSERT INTO fx_versions(recorded_ms,payload) VALUES(${stampSql},NEW.payload);
+    END;
+  `);
+  if (db.prepare('INSERT OR IGNORE INTO trend_config VALUES(1,?)').run(shanghaiDay()).changes) {
+    db.exec(`INSERT INTO account_versions(account_id,recorded_ms,payload)
+      SELECT id,${stampSql},${accountVersionJson('')} FROM accounts;
+      INSERT INTO fx_versions(recorded_ms,payload) SELECT ${stampSql},payload FROM fx_cache;`);
+  }
+  db.exec('COMMIT');
+} catch (error) {
+  db.exec('ROLLBACK');
+  throw error;
+}
+const firstTrendDay = db.prepare('SELECT first_day FROM trend_config WHERE id=1').get().first_day;
+const moneyCents = value => Math.round(value * 100);
+function totalsFor(items, usdRate, value = item => item.value_cny) {
+  let assets=0, liabilities=0;
+  for (const item of items) {
+    if (item.kind === 'asset') assets += moneyCents(value(item));
+    else liabilities += moneyCents(value(item));
+  }
+  const totals = (a,l) => ({ assets:a/100, liabilities:l/100, netWorth:(a-l)/100 });
+  return {CNY:totals(assets,liabilities),USD:usdRate>0?totals(Math.round(assets/usdRate),Math.round(liabilities/usdRate)):null};
+}
+function snapshotAt(cutoff) {
+  const items=db.prepare(`SELECT account_id,payload FROM (
+    SELECT account_id,payload,ROW_NUMBER() OVER(PARTITION BY account_id ORDER BY recorded_ms DESC,id DESC) AS seq
+    FROM account_versions WHERE recorded_ms < ?
+  ) WHERE seq=1 AND payload IS NOT NULL ORDER BY account_id`).all(cutoff)
+    .map(row=>({id:row.account_id,...JSON.parse(row.payload)}));
+  const quote=db.prepare('SELECT payload FROM fx_versions WHERE recorded_ms < ? ORDER BY recorded_ms DESC,id DESC LIMIT 1').get(cutoff);
+  const fx=quote?JSON.parse(quote.payload):null;
+  return {items,fx,totals:totalsFor(items,fx?.rates.USD)};
+}
+function closeTrendDays(now=Date.now()) {
+  const today=shanghaiDay(now);
+  const last=db.prepare('SELECT MAX(day) AS day FROM daily_snapshots').get().day;
+  for(let day=last?changeDay(last,1):firstTrendDay;day<today;day=changeDay(day,1)){
+    const cutoff=dayStart(changeDay(day,1));
+    db.prepare('INSERT OR IGNORE INTO daily_snapshots VALUES(?,?,?,?)')
+      .run(day,cutoff,new Date(now).toISOString(),JSON.stringify(snapshotAt(cutoff)));
+  }
+}
+function trendChanges(previous,current) {
+  const old=new Map(previous.items.map(item=>[item.id,item]));
+  // Comparable auto-valued positions use the previous applied rate. Manual
+  // valuations and positions without a comparable rate remain in the other component.
+  const counter=totalsFor(current.items,previous.fx?.rates.USD,item=>{
+    const prior=old.get(item.id);
+    return item.fx_mode==='auto' && prior?.fx_mode==='auto' && prior.currency===item.currency &&
+      item.currency!=='CNY' && prior.fx_rate>0 && item.fx_rate>0
+      ?item.original_value*prior.fx_rate:item.value_cny;
+  });
+  return Object.fromEntries(['CNY','USD'].map(currency=>[currency,
+    !previous.totals[currency]||!current.totals[currency]?null:
+    Object.fromEntries(['assets','liabilities','netWorth'].map(metric=>{
+      const a=moneyCents(previous.totals[currency][metric]),b=moneyCents(current.totals[currency][metric]);
+      const c=moneyCents(counter[currency][metric]);
+      return [metric,{delta:(b-a)/100,fxImpact:(b-c)/100,otherChange:(c-a)/100}];
+    }))]));
+}
+function readTrend(days,selectedDay){
+  closeTrendDays();
+  const today=shanghaiDay();
+  const rows=db.prepare('SELECT day,payload FROM daily_snapshots WHERE day>=? ORDER BY day').all(changeDay(today,-days-1));
+  let prev=null;
+  const points=rows.map(row=>{
+    const current=JSON.parse(row.payload);
+    const changes=prev&&changeDay(prev.day,1)===row.day?trendChanges(prev,current):null;
+    prev={...current,day:row.day};
+    return {day:row.day,totals:current.totals,quoteDate:current.fx?.quotedAt??null,changes};
+  }).filter(point=>point.day>=changeDay(today,-days));
+  const detail=selectedDay?rows.find(row=>row.day===selectedDay):rows.at(-1);
+  return {firstDay:firstTrendDay,points,detail:detail?{day:detail.day,...JSON.parse(detail.payload)}:null,
+    today:{day:today,totals:snapshotAt(Date.now()+1).totals}};
+}
+function runTrendCut(){
+  try { closeTrendDays(); } catch (error) { console.error('日终快照失败',error.message); }
+}
+runTrendCut();
+setInterval(runTrendCut,60000).unref();
+
+
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(part => {
     const index = part.indexOf('=');
@@ -357,6 +472,11 @@ async function api(req, res, pathname, searchParams) {
   if (pathname === '/api/fx' && ['GET','POST'].includes(req.method)) {
     try {const fx=req.method==='POST'?await revalueAccounts(true):await getFx();return json(res,200,fx);}
     catch(e){return json(res,503,{error:e.message});}
+  }
+  if (pathname === '/api/trend' && req.method === 'GET') {
+    const days=Number(searchParams.get('days')||30);
+    if (![7,30,90].includes(days)) return json(res,400,{error:'请选择 7、30 或 90 天'});
+    return json(res,200,readTrend(days,searchParams.get('day')));
   }
   if (pathname === '/api/summary' && req.method === 'GET') {
     let warning=null;try{await revalueAccounts();}catch(e){warning=e.message;}

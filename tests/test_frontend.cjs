@@ -31,3 +31,22 @@ get('budgetLimit').value='0';await vm.runInContext(`saveBudget({preventDefault()
 get('budgetLimit').value='600';vm.runInContext(`api=async()=>{throw Error('预算保存失败')}`,context);await vm.runInContext(`saveBudget({preventDefault(){}})`,context);assert.equal(get('budgetError').textContent,'预算保存失败');assert.equal(get('saveBudgetBtn').disabled,false);
 console.log('PASS budget form: create/edit payload, percent conversion, invalid amount blocked, failure shown and retry enabled');
 })().catch(e=>{console.error(e);process.exitCode=1});
+
+get('trendCurrency').value='USD';
+get('trendMetric').value='assets';
+vm.runInContext(`trendData={
+  firstDay:'2026-11-05',
+  points:[{day:'2026-11-05',totals:{CNY:{assets:72000},USD:{assets:10000}},changes:null},
+    {day:'2026-11-06',totals:{CNY:{assets:71000},USD:{assets:10000}},changes:{CNY:{assets:{delta:-1000,fxImpact:-1000,otherChange:0}}}}],
+  today:{totals:{USD:null}},
+  detail:{day:'2026-11-06',totals:{CNY:{assets:71000},USD:{assets:10000}},fx:{quotedAt:'2026-11-06',rates:{USD:7.1}},
+    items:[{name:'<账户>',kind:'asset',original_value:10000,currency:'USD',value_cny:71000}]}
+};renderTrend();`,context);
+assert.match(get('trendToday').textContent,/暂无数据/);
+assert.match(get('trendChart').innerHTML,/<svg/);
+assert.match(get('trendDetail').innerHTML,/10,000/);
+assert.match(get('trendDetail').innerHTML,/&lt;账户&gt;/);
+get('trendCurrency').value='CNY';
+vm.runInContext('renderTrend()',context);
+assert.match(get('trendDetail').innerHTML,/汇率影响.*1,000/);
+console.log('PASS trend UI: currency switch, FX attribution, missing live quote and safe account display');
