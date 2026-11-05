@@ -376,6 +376,16 @@
 </header>
 <div class="content">
 <section class="view active" id="dashboardView">
+<section class="card" aria-labelledby="ledgerTitle" style="margin-bottom:16px;padding:20px">
+<div class="toolbar" style="margin-bottom:8px"><div><h2 id="ledgerTitle" style="margin:0">说一句，记一笔</h2><small>记收入、记支出、查流水，也可以修改已有流水</small></div></div>
+<label for="ledgerText">记账指令</label>
+<textarea class="input" id="ledgerText" maxlength="500" rows="3" style="width:100%;resize:vertical;box-sizing:border-box;min-height:85px;margin:6px 0 10px" placeholder="例如：昨天午饭花了 48 元，用支付宝。"></textarea>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="ledgerMic" type="button"><i data-lucide="mic"></i><span>开始说话</span></button><button class="btn primary" id="ledgerRun" type="button">处理这句话</button></div>
+<p style="color:var(--muted);font-size:12px">也可以输入「这周餐饮花了多少」或「把昨天那笔午饭改成 58 元」。浏览器可能使用在线语音识别；如服务器已启用模型，提交的这句话会发给模型解析。</p>
+<p id="ledgerStatus" role="status" aria-live="polite"></p>
+<div id="ledgerResult"></div>
+</section>
+
 <div class="grid metrics">
 <article class="card metric">
 <div class="metric-label"><span>净资产</span><i data-lucide="wallet-cards"></i></div>
@@ -449,7 +459,7 @@
 <section class="view" id="transactionsView">
 <div class="toolbar">
 <div class="toolbar-left"><div class="search"><i data-lucide="search"></i><input class="input" id="transactionSearch" placeholder="搜索交易方或备注"/></div><select class="select" id="transactionType"><option value="all">全部类型</option><option value="expense">支出</option><option value="income">收入</option><option value="transfer">转账</option></select><select class="select"><option>本月</option><option>上月</option><option>今年</option></select></div>
-<div class="toolbar-right"><button class="btn" id="exportTransactions"><i data-lucide="download"></i>导出</button></div>
+<div class="toolbar-right"><button class="btn" id="exportTransactions"><i data-lucide="download"></i>导出全部流水 CSV</button></div>
 </div>
 <article class="card table-wrap">
 <table id="transactionsTable">
@@ -465,13 +475,13 @@
 <article class="card metric"><div class="metric-label"><span>剩余额度</span><i data-lucide="shield-check"></i></div><div class="metric-value">—</div><div class="metric-foot">等待数据加载</div></article>
 <article class="card metric"><div class="metric-label"><span>预计月底</span><i data-lucide="scan-line"></i></div><div class="metric-value down">—</div><div class="metric-foot">等待数据加载</div></article>
 </div>
-<div class="toolbar" style="margin-top:16px"><div><strong>分类预算</strong><div style="color:var(--muted);font-size:12px;margin-top:3px">按各分类设置的阈值提醒</div></div><button class="btn" id="budgetSettingsBtn"><i data-lucide="settings-2"></i>预算设置</button></div>
+<div class="toolbar" style="margin-top:16px"><div><strong>分类预算</strong><div style="color:var(--muted);font-size:12px;margin-top:3px">按人民币流水计算，各分类可设置预警阈值</div></div><button class="btn" id="budgetSettingsBtn"><i data-lucide="settings-2"></i>预算设置</button></div>
 <div class="budget-list">等待数据加载</div>
 </section>
 <section class="view" id="reportsView">
 <div class="toolbar">
 <div aria-label="报告周期" class="segmented" role="group"><button class="segment" data-period="week">本周</button><button class="segment active" data-period="month">本月</button></div>
-<div class="toolbar-right"><button class="btn" id="exportReport"><i data-lucide="file-down"></i>导出报告</button></div>
+<div class="toolbar-right"><select id="reportCurrency" aria-label="报告币种"><option>CNY</option><option>USD</option><option>HKD</option></select><button class="btn" id="exportReport"><i data-lucide="file-down"></i>导出报告 CSV</button></div>
 </div>
 <div class="report-summary">
 <div><span>期间收入</span><strong class="up" id="reportIncome">—</strong></div>
@@ -521,33 +531,19 @@
 </div>
 </div>
 <div aria-labelledby="importModalTitle" aria-modal="true" class="modal-backdrop" id="importModal" role="dialog">
-<div class="modal wide">
-<div class="modal-head"><h2 id="importModalTitle">批量导入账单</h2><button aria-label="关闭" class="close" data-close="importModal"><i data-lucide="x"></i></button></div>
+<div class="modal"><div class="modal-head"><h2 id="importModalTitle">批量导入账单</h2><button aria-label="关闭" class="close" data-close="importModal">×</button></div>
 <div class="modal-body">
-<div class="import-steps"><div class="step active" data-step-indicator="1"><span class="step-index">1</span><span class="step-label">上传文件</span></div><div class="step" data-step-indicator="2"><span class="step-index">2</span><span class="step-label">字段映射</span></div><div class="step" data-step-indicator="3"><span class="step-index">3</span><span class="step-label">检查入账</span></div></div>
-<div data-import-step="1">
-<div class="dropzone"><i data-lucide="file-spreadsheet"></i><strong>拖入账单文件，或选择示例文件</strong><p>支持支付宝、微信、信用卡和通用 CSV / XLSX</p><button class="btn" id="chooseSample"><i data-lucide="folder-open"></i>选择示例账单</button></div>
-<div class="hidden" id="sampleChosen" style="margin-top:12px;padding:12px;background:var(--green-soft);border-radius:6px"></div>
+<div class="form-grid">
+<div class="field full"><label for="importFile">账单文件</label><input class="input" id="importFile" type="file" accept=".csv,text/csv"><small>支持衡资导出的 CSV 和含日期、金额、收支类型的通用 CSV。Excel 文件请先另存为 CSV。</small></div>
+<div class="field full"><label for="importAccount">入账账户（选填）</label><select id="importAccount"></select><small>不指定时按 CSV 账户名称匹配；没有账户字段则保持未指定。</small></div>
 </div>
-<div class="hidden" data-import-step="2">
-<p style="margin-top:0;color:var(--muted);font-size:12px">已识别支付宝账单格式，请确认字段映射。</p>
-<div class="mapping"><code>交易时间</code><span>→</span><select><option>交易日期</option></select></div>
-<div class="mapping"><code>交易对方</code><span>→</span><select><option>交易方 / 事项</option></select></div>
-<div class="mapping"><code>金额（元）</code><span>→</span><select><option>金额</option></select></div>
-<div class="mapping"><code>收/支</code><span>→</span><select><option>交易类型</option></select></div>
-<div class="mapping"><code>交易状态</code><span>→</span><select><option>备注</option></select></div>
-</div>
-<div class="hidden" data-import-step="3">
-<div class="review-box"><div><span>有效记录</span><strong>0</strong></div><div><span>重复记录</span><strong>0</strong></div><div><span>需确认</span><strong>0</strong></div></div>
-<div class="table-wrap"><table><thead><tr><th>日期</th><th>交易方</th><th>识别结果</th><th class="num">金额</th></tr></thead><tbody></tbody></table></div>
-</div>
-</div>
-<div class="modal-foot"><button class="btn ghost" disabled="" id="importPrev">上一步</button><button class="btn primary" disabled="" id="importNext">下一步</button></div>
-</div>
+<p id="importStatus" role="status" aria-live="polite"></p>
+<div class="table-wrap"><table class="hidden" id="importPreview"><thead><tr><th>日期</th><th>交易方</th><th>金额</th><th>状态</th></tr></thead><tbody></tbody></table></div>
+</div><div class="modal-foot"><button class="btn" id="previewImport">预览文件</button><button class="btn primary" id="confirmImport" disabled>确认导入</button></div></div>
 </div>
 <div aria-live="polite" class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
 
-<script src="/app/fm/app.js?v=daily-trend-20261105"></script>
+<script src="/app/fm/app.js?v=ledger-csv-20261105"></script>
 </body>
 </html>

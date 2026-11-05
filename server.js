@@ -329,14 +329,18 @@ function json(res, status, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function readBody(req, limit = 2_000_000) {
+function readBody(req, limit = 2_500_000) {
   return new Promise((resolve, reject) => {
     let body = '';
+    req.setEncoding('utf8');
+    let size=0;
     req.on('data', chunk => {
+      size+=Buffer.byteLength(chunk);
+      if (size > limit) {reject(new Error('请求体过大'));return}
       body += chunk;
-      if (body.length > limit) reject(new Error('请求体过大'));
     });
     req.on('end', () => {
+      if(size>limit)return;
       try { resolve(body ? JSON.parse(body) : {}); }
       catch { reject(new Error('JSON 格式无效')); }
     });
@@ -354,9 +358,14 @@ function currentBudgetMonth(){
  const today=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});const [y,m]=today.split('-').map(Number);return [today.slice(0,7)+'-01',today.slice(0,7)+'-'+String(new Date(Date.UTC(y,m,0)).getUTCDate()).padStart(2,'0')];
 }
 
+function shiftDay(day, n) {
+  return new Date(Date.parse(day+'T00:00:00Z')+n*86400000).toISOString().slice(0,10);
+}
 function monthRange(period) {
-  if (period === 'week') return ['2026-10-22', '2026-10-28'];
-  return ['2026-10-01', '2026-10-31'];
+  if(period!=='week')return currentBudgetMonth();
+  const day=shanghaiDay(), weekday=new Date(day+'T00:00:00Z').getUTCDay();
+  const monday=shiftDay(day,-((weekday+6)%7));
+  return [monday,shiftDay(monday,6)];
 }
 
 function getSummary() {
@@ -371,8 +380,8 @@ function getSummary() {
       COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income,
       COALESCE(SUM(expense_amount), 0) AS expense
     FROM transactions
-    WHERE occurred_on BETWEEN '2026-10-01' AND '2026-10-31'
-  `).get();
+    WHERE occurred_on BETWEEN ? AND ? AND currency='CNY'
+  `).get(...currentBudgetMonth());
   return {
     assets: totals.assets,
     liabilities: totals.liabilities,
@@ -383,65 +392,188 @@ function getSummary() {
   };
 }
 
-function getReport(period = 'month') {
+function getReport(period = 'month', currency = 'CNY') {
   const [from, to] = monthRange(period);
   const totals = db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income,
       COALESCE(SUM(expense_amount), 0) AS expense,
       COALESCE(SUM(CASE WHEN type IN ('expense','repayment') THEN -amount ELSE 0 END), 0) AS cash_outflow
-    FROM transactions WHERE occurred_on BETWEEN ? AND ?
-  `).get(from, to);
+    FROM transactions WHERE occurred_on BETWEEN ? AND ? AND currency=?
+  `).get(from, to,currency);
   const categories = db.prepare(`
     SELECT category, ROUND(SUM(expense_amount), 2) AS amount
     FROM transactions
-    WHERE occurred_on BETWEEN ? AND ? AND expense_amount > 0
+    WHERE occurred_on BETWEEN ? AND ? AND currency=? AND expense_amount > 0
     GROUP BY category ORDER BY amount DESC
-  `).all(from, to);
+  `).all(from, to,currency);
   const savings = totals.income - totals.expense;
-  return { period, from, to, ...totals, savings, savingsRate: totals.income ? savings / totals.income : 0, categories };
+  return { period, from, to, currency, ...totals, savings, savingsRate: totals.income ? savings / totals.income : 0, categories };
 }
 
-function parseCsv(text) {
-  const rows = [];
-  let row = [], field = '', quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (char === '"') {
-      if (quoted && text[i + 1] === '"') { field += '"'; i++; }
-      else quoted = !quoted;
-    } else if (char === ',' && !quoted) {
-      row.push(field.trim()); field = '';
-    } else if ((char === '\n' || char === '\r') && !quoted) {
-      if (char === '\r' && text[i + 1] === '\n') i++;
-      row.push(field.trim()); field = '';
-      if (row.some(Boolean)) rows.push(row);
-      row = [];
-    } else field += char;
+const csvHeaders = ['日期','交易方','分类','账户','类型','现金金额','计入支出','币种','本金','利息','备注'];
+const txTypes = ['income','expense','transfer','trade','repayment'];
+const txCurrencies = ['CNY','USD','HKD'];
+function validTxDay(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const date = new Date(s+'T00:00:00Z');
+  return Number.isFinite(+date) && date.toISOString().slice(0,10)===s;
+}
+
+function csvInput(body) {
+  if (typeof body.csv !== 'string' || body.csv.length > 900000) throw Error('请选择不超过 900 KB 的 CSV 文件');
+  const table = [];
+  let row=[], field='', quoted=false, ended=false;
+  const cell=()=>{row.push(field);field='';ended=false};
+  const line=()=>{cell();if(row.some(x=>x.trim()))table.push(row);row=[]};
+  const csv=body.csv.replace(/^\uFEFF/,'');
+  for(let i=0;i<csv.length;i++){
+    const c=csv[i];
+    if(quoted){
+      if(c==='"'){if(csv[i+1]==='"'){field+='"';i++}else{quoted=false;ended=true}}
+      else field+=c;
+    }else if(c===',')cell();
+    else if(c==='\n'||c==='\r'){if(c==='\r'&&csv[i+1]==='\n')i++;line()}
+    else if(c==='"'&&!field&&!ended)quoted=true;
+    else if(ended||c==='"')throw Error('CSV 引号格式错误');
+    else field+=c;
   }
-  if (field || row.length) { row.push(field.trim()); rows.push(row); }
-  if (rows.length < 2) return [];
-  const headers = rows.shift().map(header => header.replace(/^\uFEFF/, ''));
-  return rows.map(values => Object.fromEntries(headers.map((header, index) => [header, values[index] || ''])));
+  if(quoted)throw Error('CSV 引号未闭合');
+  line();
+  const dates=['日期','交易日期','交易时间','date'], amounts=['现金金额','金额（元）','金额(元)','金额','amount'], directions=['类型','收/支','收支','收支类型','type'];
+  const headerIndex=table.findIndex(r=>dates.some(k=>r.some(v=>v.trim()===k))&&amounts.some(k=>r.some(v=>v.trim()===k))&&directions.some(k=>r.some(v=>v.trim()===k)));
+  if(headerIndex<0)throw Error('未找到日期、金额及收支类型表头');
+  const headers=table[headerIndex].map(x=>x.trim());
+  const own=headers.join(',')===csvHeaders.join(',');
+  const records=table.slice(headerIndex+1);
+  if(!records.length||records.length>5000)throw Error('请导入 1 至 5000 条流水');
+  const accounts=db.prepare('SELECT id,name FROM accounts').all();
+  const override=body.accountId==null||body.accountId===''?null:accounts.find(a=>a.id===Number(body.accountId));
+  if(override===undefined)throw Error('所选账户不存在');
+  const count=db.prepare('SELECT COUNT(*) AS n FROM transactions WHERE occurred_on=? AND merchant=? AND category=? AND account_id IS ? AND type=? AND amount=? AND expense_amount=? AND principal_amount=? AND interest_amount=? AND currency=? AND note=?');
+  const used=new Map();
+  const map={收入:'income',收款:'income',支出:'expense',转账:'transfer',不计收支:'transfer',不计入收支:'transfer',证券交易:'trade',还款:'repayment'};
+  return records.map((r,i)=>{
+    const fail=msg=>{throw Error('第 '+(headerIndex+i+2)+' 条 CSV 记录：'+msg)};
+    if(r.length===headers.length+1&&!r.at(-1).trim())r.pop();
+    if(r.length!==headers.length)fail('字段数量与表头不一致');
+    const pick=(...keys)=>keys.map(k=>r[headers.indexOf(k)]).find(v=>v?.trim())??'';
+    const clean=v=>own?v.replace(/^'(?=(?:\s*[=+@-]|['\t\r\n]))/,''):v.trim();
+    const m=pick(...dates).trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?=$|[ T])/);
+    const day=m?[m[1],m[2].padStart(2,'0'),m[3].padStart(2,'0')].join('-'):'';
+    if(!validTxDay(day))fail('日期无效');
+    const status=pick('交易状态','当前状态').trim();
+    if(/关闭|失败|退款|撤销|取消|待支付|待付款|处理中/.test(status))fail('账单状态为「'+status+'」，请先移除未完成或退款的记录');
+    const direction=pick(...directions).trim();
+    const type=map[direction]||direction.toLowerCase();
+    if(!txTypes.includes(type))fail('不支持的收支类型');
+    const decimal=(value,optional=false)=>{
+      const v=value.trim().replace(/^[¥￥$]/,'').replaceAll(',','');
+      if(!v&&optional)return 0;
+      if(!/^[+-]?\d+(?:\.\d{1,2})?$/.test(v)||!Number.isSafeInteger(Math.round(Number(v)*100)))fail('金额无效');
+      return Number(v);
+    };
+    const raw=decimal(pick(...amounts));
+    if(!raw)fail('金额不能为零');
+    const amount=headers.includes('现金金额')?raw:(type==='income'?1:-1)*Math.abs(raw);
+    if((type==='income'&&amount<0)||(['expense','repayment'].includes(type)&&amount>0))fail('金额正负与收支类型不一致');
+    const expense=pick('计入支出');
+    const principal=decimal(pick('本金'),true), interest=decimal(pick('利息'),true);
+    const expenseAmount=expense?decimal(expense):(type==='expense'?Math.abs(amount):type==='repayment'?interest:0);
+    if(Math.min(expenseAmount,principal,interest)<0)fail('支出、本金和利息不能为负数');
+    const currency=pick('币种','currency').trim().toUpperCase()||'CNY';
+    if(!txCurrencies.includes(currency))fail('仅支持 CNY、USD、HKD');
+    const name=clean(pick('账户','account'));
+    const matches=name?accounts.filter(a=>a.name===name):[];
+    if(!override&&name&&matches.length!==1)fail('无法唯一匹配账户「'+name+'」，请先建立账户或指定导入账户');
+    const accountId=override?.id??matches[0]?.id??null;
+    const merchant=clean(pick('交易方','交易对方','商品说明','merchant'))||'未命名交易';
+    const category=clean(pick('分类','category'))||(type==='income'?'其他收入':type==='transfer'?'账户转账':'待分类');
+    const note=clean(pick('备注','note'));
+    const values=[day,merchant,category,accountId,type,amount,expenseAmount,principal,interest,currency,note];
+    const key=JSON.stringify(values);
+    let remaining=used.get(key)??count.get(...values).n;
+    const duplicate=remaining>0;
+    used.set(key,Math.max(0,remaining-1));
+    return {occurredOn:day,merchant,category,accountId,type,amount,currency,duplicate,values};
+  });
 }
 
-function normalizeImportRow(row, accountId) {
-  const pick = (...keys) => keys.map(key => row[key]).find(value => value !== undefined && value !== '') || '';
-  const dateText = pick('交易时间', '日期', 'date', '交易日期').slice(0, 10).replaceAll('/', '-');
-  const merchant = pick('交易对方', '商品说明', '交易方', 'merchant') || '未命名交易';
-  const amountRaw = pick('金额（元）', '金额', 'amount').replace(/[¥￥,$]/g, '');
-  const direction = pick('收/支', '类型', 'type');
-  const absolute = Math.abs(Number(amountRaw) || 0);
-  const type = /收入|收款|income/i.test(direction) ? 'income' : /转账|还款|transfer/i.test(direction) ? 'transfer' : 'expense';
-  const amount = type === 'income' ? absolute : -absolute;
-  const category = type === 'transfer' ? '账户转账' : type === 'income' ? '其他收入' : '待分类';
-  const fingerprint = crypto.createHash('sha256').update([dateText, merchant, amount, accountId].join('|')).digest('hex');
-  const duplicate = Boolean(db.prepare(`
-    SELECT 1 FROM transactions
-    WHERE fingerprint = ?
-       OR (occurred_on = ? AND merchant = ? AND amount = ? AND COALESCE(account_id, 0) = COALESCE(?, 0))
-  `).get(fingerprint, dateText || '2026-10-28', merchant, amount, accountId));
-  return { occurredOn: dateText || '2026-10-28', merchant, category, accountId, type, amount, expenseAmount: type === 'expense' ? absolute : 0, currency: 'CNY', note: pick('备注', '交易状态', 'note'), fingerprint, duplicate };
+function downloadCsv(res, filename, headers, rows) {
+  const encode=x=>{
+    let v=String(x??'');
+    if(typeof x==='string'&&/^(?:\s*[=+@-]|['\t\r\n])/.test(v))v="'"+v;
+    return '"'+v.replaceAll('"','""')+'"';
+  };
+  const csv='\uFEFF'+headers.join(',')+'\r\n'+rows.map(r=>r.map(encode).join(',')).join('\r\n');
+  res.writeHead(200,{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="'+filename+'"','Cache-Control':'no-store'});
+  return res.end(csv);
+}
+
+function localLedgerIntent(text,today) {
+  const keywordGroups={餐饮:/餐饮|午饭|晚饭|早饭|吃饭|咖啡|早餐|晚餐|午餐|奶茶|外卖/,交通:/打车|地铁|公交|交通|停车/,工资:/工资|薪水/,稿费:/稿费/};
+  const category=Object.keys(keywordGroups).find(k=>keywordGroups[k].test(text))||'';
+  const date=text.match(/\d{4}-\d{2}-\d{2}/)?.[0]||(/前天/.test(text)?shiftDay(today,-2):/昨天|昨晚/.test(text)?shiftDay(today,-1):/今天|今晚/.test(text)?today:'');
+  const period=/上周/.test(text)?'lastWeek':/这周|本周/.test(text)?'week':/本月|这个月/.test(text)?'month':'';
+  const mode=/改成|改为|修改/.test(text)?'edit':/多少|查询|明细|查看|^查/.test(text)?'query':/收入|到账|收了|收到|花|支付|买|付了|支出|赚/.test(text)?'create':'unknown';
+  const amount=mode==='edit'?text.match(/(?:改成|改为)\s*(\d+(?:\.\d{1,2})?)(?![\d.])/)?.[1]:text.match(/(?<![\d.])(\d+(?:\.\d{1,2})?)\s*(?:美元|港币|港元|人民币|元|块|USD|HKD|CNY)/i)?.[1];
+  const keyword=text.match(/午饭|晚饭|早饭|吃饭|咖啡|早餐|晚餐|午餐|奶茶|外卖|打车|地铁|公交|停车|工资|稿费/)?.[0]||'';
+  return {mode,date,period,category,keyword,merchant:keyword,type:/收入|到账|收了|收到|赚/.test(text)?'income':/支出|花|支付|买|付了/.test(text)?'expense':'',
+    amount:amount?Number(amount):null,currency:/美元|USD/i.test(text)?'USD':/港币|港元|HKD/i.test(text)?'HKD':/人民币|元|块|CNY/i.test(text)?'CNY':'',
+    accountName:''};
+}
+
+async function ledgerIntent(text,today) {
+  const model=process.env.HENGZI_AI_MODEL, key=process.env.HENGZI_AI_API_KEY;
+  if(model&&key){
+    try{
+      const url=new URL(process.env.HENGZI_AI_CHAT_URL||'https://api.openai.com/v1/chat/completions');
+      if(url.protocol!=='https:')throw Error('HTTPS required');
+      const response=await fetch(url,{method:'POST',redirect:'error',signal:AbortSignal.timeout(8000),headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model,messages:[
+        {role:'system',content:'将用户的一句中文记账指令解析为单个 JSON 对象。今天（上海时间）是 '+today+'。字段 mode(create/query/edit/unknown), date(YYYY-MM-DD 或空), period(week/lastWeek/month 或空), type(income/expense 或空), amount(正数或 null；修改时为新金额), currency(CNY/USD/HKD 或空), merchant(摘要), category(分类), keyword(匹配已有记录的简短摘要；修改时填写), accountName(用户明确指定的账户名称或空)。不要编造金额、账号、币种；不确定意图时 unknown。只做单笔新增、按时间分类查询、或修改单笔金额。'},
+        {role:'user',content:text}],response_format:{type:'json_object'}})});
+      if(!response.ok)throw Error('AI unavailable');
+      const data=JSON.parse((await response.json()).choices[0].message.content);
+      if(!['create','query','edit','unknown'].includes(data.mode))throw Error('Invalid mode');
+      const clean=k=>typeof data[k]==='string'?data[k].trim().slice(0,120):'';
+      return {mode:data.mode,date:validTxDay(data.date)?data.date:'',period:['week','lastWeek','month'].includes(data.period)?data.period:'',
+        type:['income','expense'].includes(data.type)?data.type:'',amount:typeof data.amount==='number'&&Number.isFinite(data.amount)&&data.amount>0?data.amount:null,
+        currency:txCurrencies.includes(data.currency)?data.currency:'',merchant:clean('merchant'),category:clean('category'),keyword:clean('keyword'),accountName:clean('accountName'),source:'ai'};
+    }catch{ return {...localLedgerIntent(text,today),source:'fallback'} }
+  }
+  return {...localLedgerIntent(text,today),source:'local'};
+}
+
+async function ledgerPreview(text) {
+  const today=shanghaiDay(), p=await ledgerIntent(text,today);
+  if(p.date&&!validTxDay(p.date))throw Error('日期无效，请重新输入');
+  const accounts=db.prepare('SELECT id,name,currency FROM accounts ORDER BY id').all();
+  const matches=accounts.filter(a=>p.accountName?a.name===p.accountName:text.includes(a.name));
+  const account=matches.length===1?matches[0]:null;
+  const fields={occurredOn:p.date||today,merchant:p.merchant,category:p.category,type:p.type||'expense',amount:p.amount,currency:p.currency||account?.currency||'CNY',accountId:account?.id??null};
+  if(p.mode==='create')return {mode:p.mode,fields,source:p.source};
+  if(!['query','edit'].includes(p.mode))return {mode:'unknown',source:p.source};
+  if(p.mode==='edit'&&!p.keyword&&!p.date)throw Error('请说清要改哪一天、哪笔流水');
+  const condition=["t.type IN ('income','expense')"], params=[];
+  const filter=(sql,...values)=>{condition.push(sql);params.push(...values)};
+  let fromDay=p.date,toDay=p.date;
+  if(p.date)filter('t.occurred_on = ?',p.date);
+  else if(p.period){
+    let [from,to]=monthRange(p.period==='month'?'month':'week');
+    if(p.period==='lastWeek'){from=shiftDay(from,-7);to=shiftDay(to,-7)}
+    fromDay=from;toDay=to;
+    filter('t.occurred_on BETWEEN ? AND ?',from,to);
+  }
+  if(p.mode==='query'&&p.type)filter('t.type = ?',p.type);
+  if(p.mode==='edit'&&p.keyword)filter('(instr(t.merchant,?)>0 OR instr(t.note,?)>0)',p.keyword,p.keyword);
+  if(p.mode==='query'&&p.category)filter('t.category = ?',p.category);
+  else if(p.mode==='query'&&p.keyword)filter('(instr(t.merchant,?)>0 OR instr(t.note,?)>0)',p.keyword,p.keyword);
+  if(p.mode==='query'&&p.currency)filter('t.currency = ?',p.currency);
+  if(account)filter('t.account_id = ?',account.id);
+  const where=condition.join(' AND ');
+  const rows=db.prepare('SELECT t.*,a.name AS account_name FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id WHERE '+where+' ORDER BY t.occurred_on DESC,t.id DESC LIMIT 30').all(...params);
+  const totals=db.prepare('SELECT t.currency,t.type,COUNT(*) AS count,ROUND(SUM(ABS(t.amount)),2) AS amount FROM transactions t WHERE '+where+' GROUP BY t.currency,t.type').all(...params);
+  return {mode:p.mode,rows,totals,fromDay,toDay,category:p.category,amount:p.amount,source:p.source};
 }
 
 function sendStatic(req, res, pathname) {
@@ -507,24 +639,42 @@ async function api(req, res, pathname, searchParams) {
     const query = `SELECT t.*, a.name AS account_name FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id ${type && type !== 'all' ? 'WHERE t.type = ?' : ''} ORDER BY t.occurred_on DESC, t.id DESC LIMIT 500`;
     return json(res, 200, { transactions: type && type !== 'all' ? db.prepare(query).all(type) : db.prepare(query).all() });
   }
-  if (pathname === '/api/transactions' && req.method === 'POST') {
-    const body = await readBody(req);
-    if (!body.occurredOn || !body.merchant || !['income', 'expense', 'transfer', 'trade', 'repayment'].includes(body.type)) return json(res, 400, { error: '流水字段不完整' });
-    const amountAbs = Math.abs(Number(body.amount) || 0);
-    if (!amountAbs) return json(res, 400, { error: '金额必须大于 0' });
-    const amount = body.type === 'income' ? amountAbs : -amountAbs;
-    const expenseAmount = body.type === 'expense' ? amountAbs : body.type === 'repayment' ? Number(body.interestAmount) || 0 : 0;
-    const fingerprint = crypto.createHash('sha256').update([body.occurredOn, body.merchant, amount, Date.now()].join('|')).digest('hex');
-    const result = db.prepare(`
-      INSERT INTO transactions (occurred_on, merchant, category, account_id, type, amount, expense_amount, principal_amount, interest_amount, currency, note, fingerprint)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(body.occurredOn, body.merchant, body.category || '其他', body.accountId || null, body.type, amount, expenseAmount, Number(body.principalAmount) || 0, Number(body.interestAmount) || 0, body.currency || 'CNY', body.note || '', fingerprint);
-    return json(res, 201, { id: Number(result.lastInsertRowid) });
+  if ((pathname==='/api/transactions'&&req.method==='POST')||(/^\/api\/transactions\/\d+$/.test(pathname)&&req.method==='PUT')) {
+    const body=await readBody(req), id=req.method==='PUT'?Number(pathname.split('/').pop()):null;
+    const merchant=typeof body.merchant==='string'?body.merchant.trim():'';
+    const category=typeof body.category==='string'?body.category.trim():'';
+    const note=typeof body.note==='string'?body.note:'';
+    const currency=body.currency||'CNY', amountAbs=Number(body.amount);
+    const accountId=body.accountId==null||body.accountId===''?null:Number(body.accountId);
+    const principal=Number(body.principalAmount||0), interest=Number(body.interestAmount||0);
+    if(!validTxDay(body.occurredOn)||!merchant||merchant.length>120||category.length>100||note.length>2000||!txTypes.includes(body.type)||!txCurrencies.includes(currency))return json(res,400,{error:'请填写有效日期、摘要、类型和币种'});
+    if(![amountAbs,principal,interest].every(n=>Number.isFinite(n)&&n>=0&&n<=1e12&&Math.abs(n*100-Math.round(n*100))<.001)||!amountAbs)return json(res,400,{error:'金额必须为正数，最多两位小数'});
+    if(accountId!==null&&(!Number.isSafeInteger(accountId)||!db.prepare('SELECT id FROM accounts WHERE id=?').get(accountId)))return json(res,400,{error:'所选账户不存在'});
+    const amount=body.type==='income'?amountAbs:-amountAbs;
+    const expense=body.type==='expense'?amountAbs:body.type==='repayment'?interest:0;
+    const values=[body.occurredOn,merchant,category||'其他',accountId,body.type,amount,expense,principal,interest,currency,note];
+    if(id!==null){
+      const old=db.prepare('SELECT * FROM transactions WHERE id=?').get(id);
+      if(!old)return json(res,404,{error:'流水不存在'});
+      if(!['income','expense'].includes(old.type)||!['income','expense'].includes(body.type))return json(res,400,{error:'这里仅支持修改收入和支出'});
+      const fields=['occurred_on','merchant','category','account_id','type','amount','expense_amount','principal_amount','interest_amount','currency','note'];
+      if(JSON.stringify(fields.map(k=>old[k]))!==body.version)return json(res,409,{error:'这笔流水已更新，请重新查询后修改'});
+      db.prepare('UPDATE transactions SET occurred_on=?,merchant=?,category=?,account_id=?,type=?,amount=?,expense_amount=?,principal_amount=?,interest_amount=?,currency=?,note=? WHERE id=?').run(...values,id);
+      return json(res,200,{id});
+    }
+    const result=db.prepare('INSERT INTO transactions(occurred_on,merchant,category,account_id,type,amount,expense_amount,principal_amount,interest_amount,currency,note,fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(...values,crypto.randomUUID());
+    return json(res,201,{id:Number(result.lastInsertRowid)});
+  }
+  if(pathname==='/api/ledger/interpret'&&req.method==='POST'){
+    const body=await readBody(req);
+    const text=typeof body.text==='string'?body.text.trim():'';
+    if(!text||text.length>500)return json(res,400,{error:'请输入 1 至 500 字的记账指令'});
+    try{return json(res,200,await ledgerPreview(text))}catch(e){return json(res,400,{error:e.message})}
   }
   if (pathname === '/api/budgets' && req.method === 'GET') {
     const budgets = db.prepare(`
       SELECT b.*, COALESCE(SUM(t.expense_amount), 0) AS spent
-      FROM budgets b LEFT JOIN transactions t ON t.category = b.category AND t.occurred_on BETWEEN ? AND ?
+      FROM budgets b LEFT JOIN transactions t ON t.category = b.category AND t.occurred_on BETWEEN ? AND ? AND t.currency='CNY'
       GROUP BY b.id ORDER BY b.monthly_limit DESC
     `).all(...currentBudgetMonth());
     return json(res, 200, { budgets });
@@ -542,41 +692,30 @@ async function api(req, res, pathname, searchParams) {
     db.prepare('UPDATE budgets SET category=?,monthly_limit=?,warning_threshold=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(category,b.monthlyLimit,threshold,id);
     return json(res,200,{ok:true,id});
   }
-  if (pathname === '/api/reports' && req.method === 'GET') return json(res, 200, getReport(searchParams.get('period') || 'month'));
-  if (pathname === '/api/import/preview' && req.method === 'POST') {
-    const body = await readBody(req);
-    const rows = parseCsv(body.csv || '').map(row => normalizeImportRow(row, Number(body.accountId) || null));
-    return json(res, 200, { rows, total: rows.length, duplicates: rows.filter(row => row.duplicate).length, importable: rows.filter(row => !row.duplicate).length });
-  }
-  if (pathname === '/api/import/commit' && req.method === 'POST') {
-    const body = await readBody(req);
-    const rows = Array.isArray(body.rows) ? body.rows : [];
-    let imported = 0, duplicates = 0;
-    const batch = db.prepare('INSERT INTO import_batches (filename, source, total_rows, imported_rows, duplicate_rows) VALUES (?, ?, ?, 0, 0)').run(body.filename || 'import.csv', body.source || '通用 CSV', rows.length);
-    const insert = db.prepare(`INSERT OR IGNORE INTO transactions (occurred_on, merchant, category, account_id, type, amount, expense_amount, currency, note, fingerprint, import_batch_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  if (pathname === '/api/reports' && req.method === 'GET') return json(res, 200, getReport(searchParams.get('period')==='week'?'week':'month',txCurrencies.includes(searchParams.get('currency'))?searchParams.get('currency'):'CNY'));
+  if (['/api/import/preview','/api/import/commit'].includes(pathname) && req.method==='POST') {
+    let body, rows;
+    try{body=await readBody(req);rows=csvInput(body)}catch(e){return json(res,400,{error:e.message})}
+    const duplicates=rows.filter(r=>r.duplicate).length, importable=rows.length-duplicates;
+    if(pathname.endsWith('/preview'))return json(res,200,{total:rows.length,duplicates,importable,rows:rows.slice(0,20).map(({values,...r})=>r)});
     db.exec('BEGIN');
-    try {
-      for (const row of rows) {
-        const exists = row.duplicate || db.prepare(`
-          SELECT 1 FROM transactions
-          WHERE fingerprint = ?
-             OR (occurred_on = ? AND merchant = ? AND amount = ? AND COALESCE(account_id, 0) = COALESCE(?, 0))
-        `).get(row.fingerprint, row.occurredOn, row.merchant, Number(row.amount), row.accountId || null);
-        if (exists) { duplicates++; continue; }
-        const result = insert.run(row.occurredOn, row.merchant, row.category, row.accountId || null, row.type, Number(row.amount), Number(row.expenseAmount) || 0, row.currency || 'CNY', row.note || '', row.fingerprint, Number(batch.lastInsertRowid));
-        result.changes ? imported++ : duplicates++;
-      }
-      db.prepare('UPDATE import_batches SET imported_rows = ?, duplicate_rows = ? WHERE id = ?').run(imported, duplicates, Number(batch.lastInsertRowid));
+    try{
+      const batch=db.prepare('INSERT INTO import_batches(filename,source,total_rows,imported_rows,duplicate_rows) VALUES (?,?,?,?,?)').run(String(body.filename||'import.csv').slice(0,200),'CSV',rows.length,importable,duplicates);
+      const insert=db.prepare('INSERT INTO transactions(occurred_on,merchant,category,account_id,type,amount,expense_amount,principal_amount,interest_amount,currency,note,fingerprint,import_batch_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+      for(const row of rows)if(!row.duplicate)insert.run(...row.values,crypto.randomUUID(),Number(batch.lastInsertRowid));
       db.exec('COMMIT');
-    } catch (error) { db.exec('ROLLBACK'); throw error; }
-    return json(res, 201, { imported, duplicates, batchId: Number(batch.lastInsertRowid) });
+    }catch(e){db.exec('ROLLBACK');throw e}
+    return json(res,201,{imported:importable,duplicates});
   }
-  if (pathname === '/api/export/transactions.csv' && req.method === 'GET') {
-    const rows = db.prepare(`SELECT t.occurred_on, t.merchant, t.category, COALESCE(a.name,''), t.type, t.amount, t.expense_amount, t.note FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id ORDER BY t.occurred_on DESC`).all();
-    const escape = value => `"${String(value ?? '').replaceAll('"', '""')}"`;
-    const csv = '\uFEFF日期,交易方,分类,账户,类型,现金金额,计入支出,备注\n' + rows.map(row => Object.values(row).map(escape).join(',')).join('\n');
-    res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="hengzi-transactions.csv"' });
-    return res.end(csv);
+  if (pathname==='/api/export/transactions.csv' && req.method==='GET'){
+    const rows=db.prepare(`SELECT t.occurred_on,t.merchant,t.category,COALESCE(a.name,'') AS account,t.type,t.amount,t.expense_amount,t.currency,t.principal_amount,t.interest_amount,t.note FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id ORDER BY t.occurred_on DESC,t.id DESC`).all();
+    return downloadCsv(res,'hengzi-transactions.csv',csvHeaders,rows.map(Object.values));
+  }
+  if(pathname==='/api/export/report.csv'&&req.method==='GET'){
+    const period=searchParams.get('period')==='week'?'week':'month';
+    const [from,to]=monthRange(period);
+    const rows=db.prepare(`SELECT currency,category,ROUND(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),2) AS income,ROUND(SUM(expense_amount),2) AS expense FROM transactions WHERE occurred_on BETWEEN ? AND ? GROUP BY currency,category ORDER BY currency,category`).all(from,to);
+    return downloadCsv(res,'hengzi-report-'+period+'.csv',['起始日期','结束日期','币种','分类','收入','支出'],rows.map(r=>[from,to,...Object.values(r)]));
   }
   return json(res, 404, { error: '接口不存在' });
 }

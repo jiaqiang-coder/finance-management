@@ -30,6 +30,56 @@ vm.runInContext(`editingBudgetId=2`,context);get('budgetLimit').value='600';awai
 get('budgetLimit').value='0';await vm.runInContext(`saveBudget({preventDefault(){}})`,context);assert.equal(context.__calls.length,2);
 get('budgetLimit').value='600';vm.runInContext(`api=async()=>{throw Error('预算保存失败')}`,context);await vm.runInContext(`saveBudget({preventDefault(){}})`,context);assert.equal(get('budgetError').textContent,'预算保存失败');assert.equal(get('saveBudgetBtn').disabled,false);
 console.log('PASS budget form: create/edit payload, percent conversion, invalid amount blocked, failure shown and retry enabled');
+context.__calls=[];
+context.TextDecoder=TextDecoder;
+for(const id of ['importFile','importAccount','importPreview','confirmImport','previewImport']){
+  get(id).classList={add(){},remove(){}};
+}
+const csv='日期,交易方,金额,类型\n2026-11-05,测试咖啡,12.50,支出\n';
+get('importFile').files=[{name:'账单.csv',size:Buffer.byteLength(csv),arrayBuffer:async()=>new TextEncoder().encode(csv)}];
+get('importAccount').value='3';
+vm.runInContext(`refreshLedgerViews=()=>{};api=async(url,opt)=>{
+  __calls.push({url,...JSON.parse(opt.body)});
+  return url.endsWith('preview')?{total:1,duplicates:0,importable:1,rows:[{occurredOn:'2026-11-05',merchant:'<咖啡>',amount:-12.5,currency:'CNY'}]}:{imported:1,duplicates:0};
+};`,context);
+await vm.runInContext('handleCsv(false)',context);
+assert.equal(context.__calls[0].csv,csv);
+assert.equal(context.__calls[0].accountId,'3');
+assert.match(get('importPreview').innerHTML,/&lt;咖啡&gt;/);
+assert.equal(get('confirmImport').disabled,false);
+await vm.runInContext('handleCsv(true)',context);
+assert.equal(context.__calls[1].url,'/app/fm/api/import/commit');
+assert.equal(get('confirmImport').disabled,true);
+
+context.__calls=[];
+context.Event=Event;
+get('ledgerForm').elements={accountId:{value:''}};
+const ledger=get('ledgerText'), mic=get('ledgerMic'), run=get('ledgerRun');
+ledger.addEventListener=(_,listener)=>{ledger.oninput=listener};
+ledger.dispatchEvent=()=>ledger.oninput();
+mic.querySelector=()=>get('micLabel');
+let preview;
+run.click=()=>{preview=run.onclick()};
+context.window.SpeechRecognition=class{
+  start(){context._speech=this}
+  stop(){this.onend()}
+};
+vm.runInContext(`api=async(url,opt)=>{
+  __calls.push({url,...JSON.parse(opt.body)});
+  return {mode:'create',source:'local',fields:{merchant:'午饭',amount:48,occurredOn:'2026-11-05',currency:'CNY',type:'expense'}};
+};bindLedger();`,context);
+mic.onclick();
+assert.equal(context._speech.lang,'zh-CN');
+context._speech.onresult({results:[[{transcript:'今天午饭花了48元'}]]});
+context._speech.onend();
+await preview;
+assert.equal(ledger.value,'今天午饭花了48元');
+assert.equal(context.__calls.length,1);
+assert.equal(context.__calls[0].url,'/app/fm/api/ledger/interpret');
+assert.match(get('ledgerResult').innerHTML,/核对新流水.*保存流水/);
+get('ledgerCancel').onclick();
+assert.match(get('ledgerStatus').textContent,/流水未变更/);
+console.log('PASS UI: real CSV file decoding, preview before upload confirmation, speech callback and review before save');
 })().catch(e=>{console.error(e);process.exitCode=1});
 
 get('trendCurrency').value='USD';
