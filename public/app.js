@@ -12,8 +12,6 @@ const state = {
   accounts: [],
   transactions: [],
   budgets: [],
-  importRows: [],
-  importStep: 1,
   entryType: 'expense'
 };
 
@@ -84,7 +82,7 @@ async function loadSummary() {
   values[1].closest('.metric').querySelector('.metric-foot').textContent = '按账户当前人民币价值汇总';
   values[2].closest('.metric').querySelector('.metric-foot').textContent = '按当前负债账户汇总';
   const foot = values[3].closest('.metric').querySelector('.metric-foot');
-  foot.textContent = `收入 ${money.format(summary.income)} · 支出 ${money.format(summary.expense)}`;
+  foot.textContent = `人民币 · 收入 ${money.format(summary.income)} · 支出 ${money.format(summary.expense)}`;
 }
 
 function accountIcon(category) {
@@ -138,14 +136,14 @@ function renderTransactions() {
   });
   document.querySelector('#transactionsTable tbody').innerHTML = visible.map(row => {
     const signedClass = row.amount > 0 ? 'up' : row.type === 'transfer' ? '' : 'down';
-    const detail = row.type === 'repayment' ? `本金 ${money.format(row.principal_amount)} · 利息 ${money.format(row.interest_amount)}` : row.note;
+    const detail = row.type === 'repayment' ? `本金 ${txMoney(row.principal_amount,row.currency)} · 利息 ${txMoney(row.interest_amount,row.currency)}` : row.note;
     return `<tr data-type="${row.type}">
       <td>${escapeHtml(row.occurred_on)}</td>
       <td><strong>${escapeHtml(row.merchant)}</strong><br><small>${escapeHtml(detail)}</small></td>
       <td>${escapeHtml(row.category)}</td>
       <td>${escapeHtml(row.account_name || '未指定')}</td>
       <td><span class="tag ${row.type === 'income' ? 'good' : ''}">${labelForType(row.type)}</span></td>
-      <td class="num ${signedClass}">${row.type === 'transfer' ? '' : row.amount > 0 ? '+ ' : '- '}${money.format(Math.abs(row.amount))}</td>
+      <td class="num ${signedClass}">${row.type === 'transfer' ? '' : row.amount > 0 ? '+ ' : '- '}${txMoney(Math.abs(row.amount),row.currency)}</td>
     </tr>`;
   }).join('');
 }
@@ -159,7 +157,7 @@ async function loadTransactions() {
     recent.innerHTML = state.transactions.filter(r=>r.type!=='transfer').slice(0, 3).map(row => `<div class="activity">
       <div class="activity-icon"><i data-lucide="receipt"></i></div>
       <div><strong>${escapeHtml(row.merchant)}</strong><small>${escapeHtml(row.account_name || '未指定')} · ${escapeHtml(row.category)}</small></div>
-      <div class="activity-amount ${row.amount > 0 ? 'up' : 'down'}">${row.amount > 0 ? '+ ' : '- '}${money.format(Math.abs(row.amount))}<small>${escapeHtml(row.occurred_on)}</small></div>
+      <div class="activity-amount ${row.amount > 0 ? 'up' : 'down'}">${row.amount > 0 ? '+ ' : '- '}${txMoney(Math.abs(row.amount),row.currency)}<small>${escapeHtml(row.occurred_on)}</small></div>
     </div>`).join('');
     if (!state.transactions.length) recent.textContent='暂无流水';
     refreshIcons();
@@ -181,7 +179,8 @@ async function saveEntry() {
     body: JSON.stringify({
       occurredOn: document.getElementById('entryDate').value,
       merchant,
-      accountId: Number(document.getElementById('entryAccount').value),
+      accountId: document.getElementById('entryAccount').value || null,
+      currency: state.accounts.find(a=>a.id===Number(document.getElementById('entryAccount').value))?.currency || 'CNY',
       category: document.getElementById('entryCategory').value,
       type: state.entryType,
       amount: Number(amount),
@@ -229,60 +228,156 @@ async function loadBudgets() {
   renderBudgets();
 }
 
+const activeReportPeriod=()=>document.querySelector('[data-period].active')?.dataset.period||'month';
 async function loadReport(period) {
-  const report = await api(`/app/fm/api/reports?period=${period}`);
-  document.getElementById('reportIncome').textContent = money.format(report.income);
-  document.getElementById('reportExpense').textContent = money.format(report.expense);
+  const currency=el('reportCurrency').value;
+  const report = await api(`/app/fm/api/reports?period=${period}&currency=${currency}`);
+  if(currency!==el('reportCurrency').value||period!==activeReportPeriod())return;
+  const format=n=>txMoney(n,currency);
+  document.getElementById('reportIncome').textContent = format(report.income);
+  document.getElementById('reportExpense').textContent = format(report.expense);
   document.getElementById('reportRate').textContent = `${(report.savingsRate * 100).toFixed(1)}%`;
   document.getElementById('reportSubtitle').textContent = `${report.from} — ${report.to}`;
-  document.getElementById('reportSavings').textContent='结余 '+money.format(report.savings);
+  document.getElementById('reportSavings').textContent='结余 '+format(report.savings);
   const list = document.querySelector('#reportsView .bar-list');
   if (!report.categories.length) list.textContent='本期暂无支出';
   const max = Math.max(...report.categories.map(item => item.amount), 1);
-  if (report.categories.length) list.innerHTML = report.categories.map(item => `<div class="bar-row"><span>${escapeHtml(item.category)}</span><div class="bar-track"><div class="bar" style="width:${Math.max(4, item.amount / max * 100)}%"></div></div><span class="num">${money.format(item.amount)}</span></div>`).join('');
+  if (report.categories.length) list.innerHTML = report.categories.map(item => `<div class="bar-row"><span>${escapeHtml(item.category)}</span><div class="bar-track"><div class="bar" style="width:${Math.max(4, item.amount / max * 100)}%"></div></div><span class="num">${format(item.amount)}</span></div>`).join('');
 }
 
-function renderImportStep() {
-  document.querySelectorAll('[data-import-step]').forEach(panel => panel.classList.toggle('hidden', Number(panel.dataset.importStep) !== state.importStep));
-  document.querySelectorAll('[data-step-indicator]').forEach(indicator => {
-    const step = Number(indicator.dataset.stepIndicator);
-    indicator.classList.toggle('active', step === state.importStep);
-    indicator.classList.toggle('done', step < state.importStep);
-  });
-  document.getElementById('importPrev').disabled = state.importStep === 1;
-  const next = document.getElementById('importNext');
-  next.disabled = state.importStep === 1 && !state.importRows.length;
-  next.textContent = state.importStep === 3 ? `确认导入 ${state.importRows.filter(row => !row.duplicate).length} 条` : '下一步';
-  if (state.importStep === 3) renderImportReview();
+const el=id=>document.getElementById(id);
+const txMoney=(n,c='CNY')=>new Intl.NumberFormat('zh-CN',{style:'currency',currency:c}).format(n);
+const accountOptions=(first)=>'<option value="">'+first+'</option>'+state.accounts.map(a=>'<option value="'+a.id+'">'+escapeHtml(a.name)+'</option>').join('');
+const jsonWrite=(method,body)=>({method,body:JSON.stringify(body)});
+let csvDraft=null, csvBusy=false;
+function resetCsvPreview(){
+  csvDraft=null;
+  el('importPreview').classList.add('hidden');
+  el('importStatus').textContent='';
+  el('confirmImport').disabled=true;
 }
-
-function renderImportReview() {
-  const review = document.querySelector('[data-import-step="3"]');
-  const duplicates = state.importRows.filter(row => row.duplicate).length;
-  review.querySelector('.review-box').innerHTML = `<div><span>有效记录</span><strong>${state.importRows.length - duplicates}</strong></div><div><span>重复记录</span><strong>${duplicates}</strong></div><div><span>需确认</span><strong>${state.importRows.filter(row => row.category === '待分类').length}</strong></div>`;
-  review.querySelector('tbody').innerHTML = state.importRows.slice(0, 5).map(row => `<tr><td>${escapeHtml(row.occurredOn)}</td><td>${escapeHtml(row.merchant)}</td><td><span class="tag ${row.duplicate ? 'warn' : 'good'}">${row.duplicate ? '重复记录' : escapeHtml(row.category)}</span></td><td class="num ${row.amount < 0 ? 'down' : 'up'}">${money.format(row.amount)}</td></tr>`).join('');
+function lockCsv(busy){
+  csvBusy=busy;
+  for(const id of ['importFile','importAccount','previewImport'])el(id).disabled=busy;
+  el('confirmImport').disabled=busy||!csvDraft;
 }
-
-async function chooseCsv() {
-  const sample = '交易时间,交易对方,金额（元）,收/支,交易状态\n2026-10-28,盒马鲜生,286.40,支出,交易成功\n2026-10-27,余额宝收益,18.26,收入,交易成功\n2026-10-25,招商银行还款,8426.00,转账,交易成功';
-  if (!state.accounts.length) await loadAccounts();
-  const payload = await api('/app/fm/api/import/preview', { method: 'POST', body: JSON.stringify({ csv: sample, accountId: state.accounts.find(account => account.name.includes('支付宝'))?.id }) });
-  state.importRows = payload.rows;
-  document.getElementById('sampleChosen').classList.remove('hidden');
-  document.getElementById('sampleChosen').innerHTML = `<strong>alipay_2026-10.csv</strong><div style="color:var(--muted);font-size:12px;margin-top:3px">检测到 ${payload.total} 条记录 · ${payload.duplicates} 条重复</div>`;
-  renderImportStep();
+async function handleCsv(commit){
+  if(csvBusy||(commit&&!csvDraft))return;
+  lockCsv(true);
+  try{
+    if(!commit){
+      resetCsvPreview();
+      const file=el('importFile').files[0];
+      if(!file||!/\.csv$/i.test(file.name)||file.size>900000)throw Error('请选择不超过 900 KB 的 .csv 文件');
+      const bytes=await file.arrayBuffer();
+      let csv;try{csv=new TextDecoder('utf-8',{fatal:true}).decode(bytes)}
+      catch{csv=new TextDecoder('gb18030',{fatal:true}).decode(bytes)}
+      const body={csv,accountId:el('importAccount').value,filename:file.name};
+      const p=await api('/app/fm/api/import/preview',jsonWrite('POST',body));
+      el('importStatus').textContent=p.total+' 条 · 可导入 '+p.importable+' 条 · 重复 '+p.duplicates+' 条。下方最多显示 20 条。';
+      el('importPreview').querySelector('tbody').innerHTML=p.rows.map(r=>'<tr><td>'+escapeHtml(r.occurredOn)+'</td><td>'+escapeHtml(r.merchant)+'</td><td>'+txMoney(r.amount,r.currency)+'</td><td>'+(r.duplicate?'重复，跳过':'可导入')+'</td></tr>').join('');
+      el('importPreview').classList.remove('hidden');
+      if(p.importable)csvDraft=body;
+    }else{
+      const p=await api('/app/fm/api/import/commit',jsonWrite('POST',csvDraft));
+      resetCsvPreview();el('importFile').value='';
+      closeModal('importModal');
+      showToast('已导入 '+p.imported+' 条，跳过 '+p.duplicates+' 条重复流水');
+      refreshLedgerViews();
+    }
+  }catch(e){el('importStatus').textContent=e.message}
+  finally{lockCsv(false)}
 }
-
-async function commitImport() {
-  const result = await api('/app/fm/api/import/commit', { method: 'POST', body: JSON.stringify({ filename: 'alipay_2026-10.csv', source: '支付宝', rows: state.importRows }) });
-  closeModal('importModal');
-  state.importRows = [];
-  state.importStep = 1;
-  document.getElementById('sampleChosen').classList.add('hidden');
-  renderImportStep();
-  await Promise.all([loadTransactions(), loadSummary(), loadBudgets()]);
-  showToast(`已导入 ${result.imported} 条，跳过 ${result.duplicates} 条重复记录`);
-  switchView('transactions');
+function refreshLedgerViews(){
+  Promise.all([loadSummary(),loadTransactions(),loadBudgets()]).catch(()=>showToast('已保存，列表刷新失败，请刷新页面查看'));
+}
+const ledgerStatus=t=>{el('ledgerStatus').textContent=t};
+function renderLedgerEditor(fields,old){
+  const result=el('ledgerResult');
+  const input=(label,key,value,attrs='')=>'<div class="field"><label>'+label+'<input class="input" name="'+key+'" value="'+escapeHtml(value??'')+'" '+attrs+'></label></div>';
+  const option=(v,label,active)=>'<option value="'+v+'"'+(v===active?' selected':'')+'>'+label+'</option>';
+  result.innerHTML='<form id="ledgerForm"><h3>'+(old?'核对修改':'核对新流水')+'</h3>'+
+    (old?'<p>当前：'+escapeHtml(old.merchant)+' · '+txMoney(Math.abs(old.amount),old.currency)+' · '+escapeHtml(old.occurred_on)+'</p>':'')+
+    '<div class="form-grid">'+input('交易摘要','merchant',fields.merchant,'required maxlength="120"')+input('日期','occurredOn',fields.occurredOn,'type="date" required')+
+    '<div class="field"><label>类型<select name="type">'+option('expense','支出',fields.type)+option('income','收入',fields.type)+'</select></label></div>'+
+    input('金额','amount',fields.amount,'type="number" min="0.01" step="0.01" required')+
+    '<div class="field"><label>币种<select name="currency">'+['CNY','USD','HKD'].map(c=>option(c,c,fields.currency)).join('')+'</select></label></div>'+
+    input('分类','category',fields.category,'maxlength="100"')+
+    '<div class="field"><label>账户<select name="accountId">'+accountOptions('未指定账户')+'</select></label></div></div>'+
+    '<div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" type="submit">'+(old?'确认修改':'保存流水')+'</button><button class="btn" type="button" id="ledgerCancel">取消</button></div></form>';
+  const form=el('ledgerForm');
+  form.elements.accountId.value=fields.accountId??'';
+  el('ledgerCancel').onclick=()=>{result.textContent='';ledgerStatus('已取消，流水未变更')};
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    const btn=form.querySelector('[type=submit]');
+    if(btn.disabled)return;
+    btn.disabled=true;
+    ledgerStatus('正在保存…');
+    const data=Object.fromEntries(new FormData(form));
+    if(old){
+      data.note=old.note;data.principalAmount=old.principal_amount;data.interestAmount=old.interest_amount;
+      data.version=JSON.stringify(['occurred_on','merchant','category','account_id','type','amount','expense_amount','principal_amount','interest_amount','currency','note'].map(k=>old[k]));
+    }
+    try{
+      await api('/app/fm/api/transactions'+(old?'/'+old.id:''),jsonWrite(old?'PUT':'POST',data));
+      if(form.isConnected){result.textContent='';el('ledgerText').value='';ledgerStatus(old?'流水已修改':'流水已保存')}
+      refreshLedgerViews();
+    }catch(e){if(form.isConnected)ledgerStatus(e.message)}
+    finally{btn.disabled=false}
+  };
+}
+function renderLedgerReply(p){
+  const result=el('ledgerResult');
+  if(p.mode==='unknown'){ledgerStatus('这句话没能识别。试试「昨天午饭花了 48 元」');return}
+  ledgerStatus(p.source==='fallback'?'模型暂不可用，已用基础解析，请核对。':p.source==='local'?'当前使用基础解析。':'');
+  if(p.mode==='create'){renderLedgerEditor(p.fields);return}
+  const rows=p.rows;
+  if(!rows.length){result.textContent='没有找到匹配的流水。';return}
+  const edit=r=>renderLedgerEditor({occurredOn:r.occurred_on,merchant:r.merchant,category:r.category,type:r.type,amount:p.mode==='edit'?(p.amount??Math.abs(r.amount)):Math.abs(r.amount),currency:r.currency,accountId:r.account_id},r);
+  if(p.mode==='edit'&&rows.length===1){edit(rows[0]);return}
+  const count=p.totals.reduce((sum,x)=>sum+x.count,0);
+  result.innerHTML='<h3>'+(p.mode==='edit'?'选择要修改的一笔':'查询结果 · '+count+' 笔')+'</h3>'+
+    (p.mode==='query'?'<small>'+escapeHtml([p.fromDay?(p.fromDay===p.toDay?p.fromDay:p.fromDay+' — '+p.toDay):'全部日期',p.category].filter(Boolean).join(' · '))+'</small><p>'+p.totals.map(t=>labelForType(t.type)+' '+txMoney(t.amount,t.currency)).join(' · ')+'</p>':'')+
+    (count>rows.length?'<small>仅显示最近 '+rows.length+' 笔，可补充日期缩小范围。</small>':'')+
+    rows.map((r,i)=>'<div class="toolbar" style="margin-top:8px"><span>'+escapeHtml(r.occurred_on)+' · '+escapeHtml(r.merchant)+' · '+escapeHtml(r.account_name||'未指定账户')+' · '+txMoney(r.amount,r.currency)+'</span><button class="btn" data-ledger-edit="'+i+'" type="button">修改</button></div>').join('');
+  result.querySelectorAll('[data-ledger-edit]').forEach(b=>b.onclick=()=>edit(rows[Number(b.dataset.ledgerEdit)]));
+}
+function bindLedger(){
+  const text=el('ledgerText'), button=el('ledgerRun'), mic=el('ledgerMic');
+  let revision=0,recognition=null;
+  text.addEventListener('input',()=>{revision++;el('ledgerResult').textContent='';ledgerStatus('')});
+  button.onclick=async()=>{
+    if(button.disabled)return;
+    const value=text.value.trim();
+    if(!value){ledgerStatus('请先输入一句话或使用麦克风');return}
+    const request=++revision;
+    button.disabled=true;ledgerStatus('正在识别…');el('ledgerResult').textContent='';
+    try{
+      const p=await api('/app/fm/api/ledger/interpret',jsonWrite('POST',{text:value}));
+      if(request===revision)renderLedgerReply(p);
+    }catch(e){if(request===revision)ledgerStatus(e.message)}
+    finally{button.disabled=false}
+  };
+  mic.onclick=()=>{
+    if(recognition){recognition.stop();return}
+    const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!Recognition){ledgerStatus('当前浏览器不支持语音识别，可以直接输入文字。');return}
+    try{
+      recognition=new Recognition();recognition.lang='zh-CN';
+      recognition.onresult=e=>{
+        text.value=e.results[0][0].transcript.slice(0,500);
+        text.dispatchEvent(new Event('input'));
+        if(!button.disabled)button.click();
+        else ledgerStatus('语音已转成文字，请点「处理这句话」。');
+      };
+      recognition.onerror=()=>ledgerStatus('没能完成语音识别，请检查麦克风权限，或直接输入文字。');
+      recognition.onend=()=>{recognition=null;mic.querySelector('span').textContent='开始说话'};
+      recognition.start();
+      mic.querySelector('span').textContent='结束说话';
+      ledgerStatus('正在听…');
+    }catch{recognition=null;ledgerStatus('无法启动麦克风，可以直接输入文字。')}
+  };
 }
 
 function refreshIcons() {
@@ -293,7 +388,13 @@ function bindEvents() {
   document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
   document.querySelectorAll('[data-jump]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.jump)));
   document.getElementById('addBtn').addEventListener('click', () => openModal('addModal'));
-  document.getElementById('importBtn').addEventListener('click', () => openModal('importModal'));
+  el('importBtn').addEventListener('click',()=>{
+    if(csvBusy)return;
+    const previous=el('importAccount').value;
+    el('importAccount').innerHTML=accountOptions('按 CSV 匹配 / 未指定');
+    el('importAccount').value=previous||'';
+    openModal('importModal');
+  });
   document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => closeModal(button.dataset.close)));
   document.querySelectorAll('.modal-backdrop').forEach(backdrop => backdrop.addEventListener('click', event => { if (event.target === backdrop) closeModal(backdrop.id); }));
   document.querySelectorAll('[data-entry]').forEach(button => button.addEventListener('click', () => {
@@ -308,17 +409,16 @@ function bindEvents() {
   document.getElementById('transactionSearch').addEventListener('input', renderTransactions);
   document.getElementById('transactionType').addEventListener('change', renderTransactions);
   document.getElementById('exportTransactions').addEventListener('click', () => { location.href = '/app/fm/api/export/transactions.csv'; });
-  document.getElementById('exportReport').addEventListener('click', () => showToast('PDF 报告将在生产部署阶段接入'));
+  document.getElementById('exportReport').addEventListener('click', () => { location.href='/app/fm/api/export/report.csv?period='+activeReportPeriod(); });
   document.querySelectorAll('[data-period]').forEach(button => button.addEventListener('click', () => {
     document.querySelectorAll('[data-period]').forEach(item => item.classList.toggle('active', item === button));
     loadReport(button.dataset.period).catch(error => showToast(error.message));
   }));
-  document.getElementById('chooseSample').addEventListener('click', () => chooseCsv().catch(error => showToast(error.message)));
-  document.getElementById('importPrev').addEventListener('click', () => { if (state.importStep > 1) { state.importStep--; renderImportStep(); } });
-  document.getElementById('importNext').addEventListener('click', () => {
-    if (state.importStep < 3) { state.importStep++; renderImportStep(); }
-    else commitImport().catch(error => showToast(error.message));
-  });
+  for(const id of ['importFile','importAccount'])el(id).addEventListener('change',resetCsvPreview);
+  el('reportCurrency').onchange=()=>loadReport(activeReportPeriod()).catch(e=>showToast(e.message));
+  el('previewImport').onclick=()=>handleCsv(false);
+  el('confirmImport').onclick=()=>handleCsv(true);
+  bindLedger();
 }
 
 async function start() {
@@ -331,7 +431,6 @@ async function start() {
   bindEvents();
   bindTrend();
   refreshIcons();
-  renderImportStep();
   await Promise.all([loadSummary(), loadAccounts(), loadTransactions(), loadBudgets(), loadTrend()]);
   document.querySelector('.sync').textContent='已从服务器读取数据';
 }

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js && node --check public/app.js",
-    "test": "node --check server.js && node --check public/app.js && node tests/test_frontend.cjs && node tests/test_trend.cjs && python3 tests/test_persistence.py && python3 tests/test_fx.py && python3 tests/test_budgets.py"
+    "test": "node --check server.js && node --check public/app.js && node tests/test_frontend.cjs && node tests/test_trend.cjs && python3 tests/test_persistence.py && python3 tests/test_fx.py && python3 tests/test_budgets.py && python3 tests/test_ledger_csv.py"
   },
   "engines": {
     "node": ">=22.5.0"
