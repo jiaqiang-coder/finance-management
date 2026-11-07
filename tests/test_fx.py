@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile,shutil,subprocess,os,json,time,urllib.request,urllib.error,sqlite3
 src=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory() as t:
- app=Path(t)/'app';shutil.copytree(src,app)
+ app=Path(t)/'app';shutil.copytree(src,app,ignore=shutil.ignore_patterns('.git','data','node_modules','qa-mobile.html'))
  # Deterministic official XML shape; provider failures can be injected without a production test endpoint.
  (app/'fetch-test.cjs').write_text("global.fetch=async()=>{if(require('fs').existsSync('FAIL_FX'))throw Error('offline');return {ok:true,text:async()=>`<gesmes:Envelope><Cube><Cube time='2026-10-28'><Cube currency='USD' rate='1.1'/><Cube rate='8.8' currency='HKD'/><Cube currency='CNY' rate='7.7'/></Cube></Cube></gesmes:Envelope>`}}")
  env=os.environ.copy();env.update(PORT='14175',APP_PASSWORD='integration-test-only')

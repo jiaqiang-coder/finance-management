@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile,shutil,subprocess,os,json,time,urllib.request,urllib.error,datetime,zoneinfo
 source=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory() as tmp:
- app=Path(tmp)/'app';shutil.copytree(source,app)
+ app=Path(tmp)/'app';shutil.copytree(source,app,ignore=shutil.ignore_patterns('.git','data','node_modules','qa-mobile.html'))
  (app/'no-network.cjs').write_text("global.fetch=async()=>{throw Error('offline-test')}")
  env=os.environ.copy();env.update(PORT='14176',APP_PASSWORD='budget-test-only');cookie=None
  def call(path,data=None,method=None,auth=True):
