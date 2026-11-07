@@ -125,3 +125,15 @@ assert.doesNotMatch(get('assetAllocation').innerHTML,/零余额分类|legend-row
 vm.runInContext("state.budgets=[{category:'超支分类',monthly_limit:100,spent:125,warning_threshold:.9}];renderAlerts()",context);
 assert.match(get('#dashboardView .alert-list').innerHTML,/125% 已使用/);assert.match(get('#dashboardView .alert-list').innerHTML,/超支 ¥25/);assert.match(get('#dashboardView .alert-list').innerHTML,/aria-valuenow="100"/);
 console.log('PASS dashboard: zero rows omitted, independent row layout, overspend status and bounded progress; pie grouping preserves totals');
+// Direct labels stay visible without selecting a segment, including tiny slices.
+vm.runInContext(`renderInvestmentPie([{complete:true,cashValueCny:9999,positions:[{id:1,name:'超长名称测试股票基金',symbol:'TEST',quantity:1,marketValueCny:1}]}])`,context);
+assert.match(get('investmentAllocation').innerHTML,/pie-direct-name/);
+assert.match(get('investmentAllocation').innerHTML,/超长名称测试股…/);
+assert.match(get('investmentAllocation').innerHTML,/&lt;0.1%/);
+assert.match(get('investmentAllocation').innerHTML,/账户现金<\/tspan>/);
+assert.match(get('investmentAllocation').innerHTML,/viewBox="0 0 420 280"/);
+for(const values of [[1],[99,1],[1,1,1,1,1,1,1,93],[90,1,1,1,1,1,1,4]]){
+ const labels=vm.runInContext(`investmentPieLabels({total:100,items:${JSON.stringify(values.map(value=>({value})))}})`,context);
+ for(const right of [false,true]){const side=labels.filter(p=>p.right===right).sort((a,b)=>a.labelY-b.labelY);for(let i=0;i<side.length;i++){assert(side[i].labelY>=28&&side[i].labelY<=248);if(i)assert(side[i].labelY-side[i-1].labelY>=30);}}
+}
+console.log('PASS pie direct labels: visible names and proportions, tiny slices, long names and collision spacing');

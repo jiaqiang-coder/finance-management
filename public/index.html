@@ -354,8 +354,8 @@ body{line-height:1.6}.sidebar{background:#fff;color:var(--ink);border-right:1px 
 @media(prefers-reduced-motion:reduce){*{animation:none!important;scroll-behavior:auto!important}}
 
 
-.investment-pie-layout{display:grid;grid-template-columns:minmax(160px,220px) minmax(0,1fr);align-items:center;gap:16px;margin:16px 0}.investment-pie{display:block;width:100%;height:auto;overflow:visible}.investment-pie circle[role=button]{cursor:pointer}.investment-pie circle:focus{outline:2px solid var(--ink);outline-offset:3px}.pie-center-label{fill:var(--muted);font-size:12px}.pie-center-value{fill:var(--ink);font-size:20px;font-weight:650}.investment-pie-legend{min-width:0}.pie-legend-row{display:grid;grid-template-columns:9px minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:10px 0;background:transparent;border:0;border-bottom:1px solid var(--line);text-align:left;color:var(--ink);font-size:12px}.pie-legend-row[aria-pressed=true]{background:var(--green-soft)}.pie-swatch{width:8px;height:8px;border-radius:2px}.pie-legend-name{overflow-wrap:anywhere}.pie-legend-row small{display:block;color:var(--muted);font-size:11px}.pie-legend-value{text-align:right;font-variant-numeric:tabular-nums}.pie-detail{min-height:38px}.investment-grid:has(.investment-pie){grid-template-columns:minmax(0,1.4fr) minmax(250px,1fr)}
-@media(max-width:1200px){.investment-pie-layout{grid-template-columns:1fr}.investment-pie{max-width:220px;margin:auto}.investment-grid:has(.investment-pie){grid-template-columns:1fr 1fr}}
+.investment-pie-layout{display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:16px;margin:16px 0}.investment-pie{display:block;width:100%;max-width:480px;margin:auto;height:auto;overflow:visible}.investment-pie circle[role=button]{cursor:pointer}.investment-pie circle:focus{outline:2px solid var(--ink);outline-offset:3px}.pie-direct-label{pointer-events:none}.pie-direct-name{fill:var(--ink);font-size:13px;font-weight:500}.pie-direct-percent{fill:var(--muted);font-size:13px}.pie-center-label{fill:var(--muted);font-size:12px}.pie-center-value{fill:var(--ink);font-size:20px;font-weight:650}.investment-pie-legend{min-width:0}.pie-legend-row{display:grid;grid-template-columns:9px minmax(0,1fr) auto;align-items:center;gap:9px;width:100%;padding:10px 0;background:transparent;border:0;border-bottom:1px solid var(--line);text-align:left;color:var(--ink);font-size:12px}.pie-legend-row[aria-pressed=true]{background:var(--green-soft)}.pie-swatch{width:8px;height:8px;border-radius:2px}.pie-legend-name{overflow-wrap:anywhere}.pie-legend-row small{display:block;color:var(--muted);font-size:11px}.pie-legend-value{text-align:right;font-variant-numeric:tabular-nums}.pie-detail{min-height:38px}.investment-grid:has(.investment-pie){grid-template-columns:minmax(0,1.4fr) minmax(250px,1fr)}
+@media(max-width:1200px){.investment-pie-layout{grid-template-columns:1fr}.investment-pie{max-width:480px;margin:auto}.investment-grid:has(.investment-pie){grid-template-columns:1fr 1fr}}
 @media(max-width:760px){.investment-grid:has(.investment-pie){grid-template-columns:1fr}.investment-pie-layout{grid-template-columns:minmax(0,1fr)}.pie-legend-row{padding:12px 0}}
 
 /* Dashboard lists own their layout; never inherit the retired donut/icon grids. */
@@ -573,6 +573,6 @@ body{line-height:1.6}.sidebar{background:#fff;color:var(--ink);border-right:1px 
 <div aria-live="polite" class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
 
-<script src="/app/fm/app.js?v=investment-pie-layout-20261107"></script>
+<script src="/app/fm/app.js?v=investment-pie-labels-20261107"></script>
 </body>
 </html>
