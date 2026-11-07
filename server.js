@@ -598,7 +598,9 @@ function invReplay(accountId){
   const c=e.currency;
   if(['cash_opening','deposit','withdraw'].includes(e.type)){cash[c]=invRound(cash[c]+(e.type==='withdraw'?-e.amount:e.amount));if(cash[c]<0)invError(c+'现金不足');continue;}
   const p=positions.get(e.security_id)||{security_id:e.security_id,quantity:0,cost:0,realized:0,fees:0};
-  if(e.type==='opening'){
+  if(e.type==='adjustment'){
+   p.quantity=e.quantity;p.cost=invPrecision(e.quantity*e.price);p.display_name=JSON.parse(e.request_body).name;
+  }else if(e.type==='opening'){
    if(positions.has(e.security_id))invError('该股票已有记录，请记录买入；勿重复添加期初');
    p.cost=e.quantity*e.price;p.quantity=e.quantity;
   }else if(e.type==='buy'){
@@ -625,7 +627,7 @@ function invValuation(accountId){
   const market=q?p.quantity*q.price:null,delta=market===null?null:market-p.cost;
   if(p.quantity>0&&!q)missing.add(s.symbol+'报价');
   if(market!==null)marketValue+=converted(market,s.currency);if(delta!==null)unrealized+=converted(delta,s.currency);
-  return {...s,...p,averageCost:p.quantity?p.cost/p.quantity:0,price:q?.price??null,quoteDate:q?.quoted_at??null,quoteSource:q?.source??null,marketValue:market,marketValueCny:market===null?null:(fx.rates[s.currency]>0?invRound(market*fx.rates[s.currency]):null),unrealized:delta,unrealizedCny:delta===null?null:(fx.rates[s.currency]>0?invRound(delta*fx.rates[s.currency]):null)};
+  return {...s,...p,name:p.display_name||s.name,averageCost:p.quantity?p.cost/p.quantity:0,price:q?.price??null,quoteDate:q?.quoted_at??null,quoteSource:q?.source??null,marketValue:market,marketValueCny:market===null?null:(fx.rates[s.currency]>0?invRound(market*fx.rates[s.currency]):null),unrealized:delta,unrealizedCny:delta===null?null:(fx.rates[s.currency]>0?invRound(delta*fx.rates[s.currency]):null)};
  });
  const cashValue=Object.entries(book.cash).reduce((n,[c,v])=>n+converted(v,c),0),realized=Object.entries(book.realized).reduce((n,[c,v])=>n+converted(v,c),0);
  return {accountId,positions,cash:book.cash,realized:book.realized,fees:book.fees,events:book.events,fx,complete:missing.size===0,missing:[...missing],netValueCny:missing.size?null:invRound(marketValue+cashValue),cashValueCny:missing.size?null:invRound(cashValue),unrealizedCny:missing.size?null:invRound(unrealized),realizedCny:missing.size?null:invRound(realized)};
@@ -637,8 +639,9 @@ function invSync(accountId,strict=false){
  return v;
 }
 function invSyncAll(){for(const b of db.prepare('SELECT account_id FROM investment_books').all())invSync(b.account_id);}
+function invBookVersion(accountId){const v=db.prepare('SELECT MAX(id) AS latest,COALESCE(SUM(voided),0) AS voidCount FROM investment_events WHERE account_id=?').get(accountId);return `${v.latest||0}:${v.voidCount}`;}
 function invOverview(){
- const books=db.prepare('SELECT a.id,a.name FROM investment_books b JOIN accounts a ON a.id=b.account_id ORDER BY a.id').all().map(a=>({...invValuation(a.id),id:a.id,name:a.name}));
+ const books=db.prepare('SELECT a.id,a.name FROM investment_books b JOIN accounts a ON a.id=b.account_id ORDER BY a.id').all().map(a=>({...invValuation(a.id),id:a.id,name:a.name,version:invBookVersion(a.id)}));
  return {books,providerConfigured:Boolean(process.env.HENGZI_MARKET_API_KEY),quoteSchedule:'每天北京时间 10:00 后同步前一天及之前最近交易日的收盘价；休市沿用最近收盘价',latestJob:db.prepare('SELECT * FROM investment_quote_jobs ORDER BY id DESC LIMIT 1').get()||null};
 }
 function invAtomic(fn){db.exec('BEGIN IMMEDIATE');try{const r=fn();db.exec('COMMIT');return r;}catch(e){db.exec('ROLLBACK');throw e;}}
@@ -647,7 +650,7 @@ function invSaveEvent(accountId,b){
  if(typeof b.requestId!=='string'||!/^[a-zA-Z0-9-]{16,80}$/.test(b.requestId))invError('缺少有效请求编号，请刷新后重试');
  const requestBody=JSON.stringify(b),existing=db.prepare('SELECT id,account_id,request_body,voided FROM investment_events WHERE request_id=?').get(b.requestId);
  if(existing){if(existing.voided)invError('这笔记录已撤销，请用新请求重新录入',409);if(existing.account_id!==accountId||existing.request_body!==requestBody)invError('请求编号已用于另一笔记录',409);return {id:existing.id,repeated:true};}
- if(!['opening','buy','sell','cash_opening','deposit','withdraw'].includes(b.type)||!validTxDay(b.day)||b.day>shanghaiDay())invError('记录类型或日期无效，不能录入未来成交');
+ if(!['opening','buy','sell','adjustment','cash_opening','deposit','withdraw'].includes(b.type)||!validTxDay(b.day)||b.day>shanghaiDay())invError('记录类型或日期无效，不能录入未来成交');
  const latest=db.prepare('SELECT day FROM investment_events WHERE account_id=? AND voided=0 ORDER BY day DESC,id DESC LIMIT 1').get(accountId);
  if(latest&&b.day<latest.day)invError('请按日期顺序录入；补录旧记录前先撤销后续记录');
  let currency=b.currency,security=null,quantity=0,price=0,fee=0,amount=0;
@@ -657,10 +660,15 @@ function invSaveEvent(accountId,b){
  }else{
   const market=invMarkets[b.market],symbol=typeof b.symbol==='string'?b.symbol.trim().toUpperCase():'',name=typeof b.name==='string'?b.name.trim():'';
   if(!market||!market.exchanges.includes(b.exchange)||!symbol||symbol.length>24||!/^[A-Z0-9.\-]+$/.test(symbol)||!name||name.length>80)invError('股票市场、交易所、代码或名称无效');
-  currency=market.currency;quantity=invNumber(b.quantity,'数量',true);price=invNumber(b.price,'价格',true);fee=invRound(invNumber(b.fee??0,'费用'));
-  if(quantity<.000001||Math.abs(quantity*1e6-Math.round(quantity*1e6))>1e-4||quantity*price>1e12)invError('数量最多六位小数，成交金额过大');
+  currency=market.currency;quantity=invNumber(b.quantity,'数量',b.type!=='adjustment');price=invNumber(b.price,'价格',b.type!=='adjustment');fee=invRound(invNumber(b.fee??0,'费用'));
+  if((b.type!=='adjustment'&&quantity<.000001)||Math.abs(quantity*1e6-Math.round(quantity*1e6))>1e-4||quantity*price>1e12)invError('数量最多六位小数，成交金额过大');
   if(b.type==='opening'&&fee!==0)invError('期初成本已包含历史费用，请将费用设为 0');
   security=db.prepare('SELECT * FROM investment_securities WHERE market=? AND symbol=? AND exchange=?').get(b.market,symbol,b.exchange);
+  if(b.type==='adjustment'){
+   if(typeof b.expectedVersion!=='string'||b.expectedVersion!==invBookVersion(accountId))invError('持仓已有新记录，请刷新后再编辑',409);
+   if(!security||!invReplay(accountId).positions.some(p=>p.security_id===security.id))invError('该账户没有此股票持仓',404);
+   if(fee!==0)invError('持仓修正不产生交易费用');
+  }
   if(!security){const r=db.prepare('INSERT INTO investment_securities(market,symbol,name,currency,exchange) VALUES (?,?,?,?,?)').run(b.market,symbol,name,currency,b.exchange);security={id:Number(r.lastInsertRowid)};}
   // A trade price is a clearly labelled reference only, never a fabricated live quote.
   if(!db.prepare('SELECT security_id FROM investment_quotes WHERE security_id=?').get(security.id))db.prepare('INSERT INTO investment_quotes VALUES (?,?,?,?,?)').run(security.id,price,b.day+'T00:00:00+08:00','录入价格参考（非行情）',new Date().toISOString());
@@ -723,6 +731,12 @@ async function investmentApi(req,res,pathname){
     const last=db.prepare('SELECT id FROM investment_events WHERE account_id=? AND voided=0 ORDER BY day DESC,id DESC LIMIT 1').get(e.account_id);if(last.id!==e.id)invError('只能撤销该账户最近一笔，请先撤销后续记录',409);
     db.prepare('UPDATE investment_events SET voided=1 WHERE id=?').run(e.id);invSync(e.account_id,true);
    });json(res,200,{ok:true});return true;
+  }
+  const holding=pathname.match(/^\/api\/investments\/accounts\/(\d+)\/holdings\/(\d+)$/);
+  if(holding&&req.method==='PUT'){
+   const b=await readBody(req),security=db.prepare('SELECT * FROM investment_securities WHERE id=?').get(Number(holding[2]));if(!security)invError('证券不存在',404);
+   const body={type:'adjustment',day:shanghaiDay(),market:security.market,exchange:security.exchange,symbol:security.symbol,name:b.name,quantity:b.quantity,price:b.averageCost,fee:0,requestId:b.requestId,expectedVersion:b.expectedVersion};
+   const r=invAtomic(()=>invSaveEvent(Number(holding[1]),body));json(res,200,r);return true;
   }
   if(pathname==='/api/investments/quotes/refresh'&&req.method==='POST'){json(res,200,await invRefreshQuotes());return true;}
   if(pathname==='/api/investments/quotes'&&req.method==='PUT'){

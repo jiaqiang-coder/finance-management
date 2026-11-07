@@ -106,6 +106,42 @@ with tempfile.TemporaryDirectory() as tmp:
   with sqlite3.connect(app/'data/hengzi.db') as db:
    assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
    assert db.execute('SELECT COUNT(*) FROM investment_events WHERE voided=1').fetchone()[0]==2
+  # Edits are account-scoped correction events: cash and realised gains remain intact.
+  before=book();edit={'name':'自定义 <苹果>','quantity':12,'averageCost':11,'expectedVersion':before['version'],'requestId':str(uuid.uuid4())}
+  route=f'investments/accounts/{ident}/holdings/{sid}'
+  call(route,edit,method='PUT',expected=401,auth=False)
+  corrected=call(route,edit,method='PUT')[0]
+  assert call(route,edit,method='PUT')[0]['repeated']
+  after=book();assert after['cash']==before['cash'] and after['realized']==before['realized']
+  assert after['positions'][0]['name']=='自定义 <苹果>' and after['positions'][0]['quantity']==12
+  assert after['positions'][0]['cost']==132 and after['netValueCny']==8207.6
+  assert after['events'][-1]['type']=='adjustment'
+  following=record(event('sell',**{**security,'quantity':2,'price':13,'fee':1}))
+  assert book()['realized']['USD']==before['realized']['USD']+3
+  assert book()['positions'][0]['quantity']==10 and book()['cash']['USD']==1025
+  call('investments/events/'+str(following['id'])+'/void',{})
+  assert book()['positions'][0]['quantity']==12 and book()['cash']==before['cash']
+  call(route,{**edit,'requestId':str(uuid.uuid4()),'quantity':99},method='PUT',expected=409)
+  invalid={**edit,'expectedVersion':after['version'],'requestId':str(uuid.uuid4()),'quantity':-1}
+  call(route,invalid,method='PUT',expected=400)
+  call(route,{**invalid,'quantity':1.1234567},method='PUT',expected=400)
+  assert book()['positions'][0]['quantity']==12
+  # The same security in another account must retain its own name, quantity and cost.
+  other=call('investments/accounts',{'name':'第二投资账户'},expected=201)[0]['id']
+  call(f'investments/accounts/{other}/events',event('opening',**{**security,'quantity':2}),expected=201)
+  second=next(b for b in call('investments')[0]['books'] if b['id']==other)
+  assert second['positions'][0]['name']=='苹果' and second['positions'][0]['quantity']==2
+  stop();start();assert book()['positions'][0]['quantity']==12
+  assert book()['positions'][0]['name']=='自定义 <苹果>'
+  call('investments/events/'+str(corrected['id'])+'/void',{})
+  assert book()['positions'][0]['quantity']==10 and book()['positions'][0]['name']=='苹果'
+  # An ABA-style stale form (edit then undo) is still rejected by the version guard.
+  call(route,{**edit,'requestId':str(uuid.uuid4())},method='PUT',expected=409)
+  zero={**edit,'name':'已核对清零','quantity':0,'averageCost':0,'expectedVersion':book()['version'],'requestId':str(uuid.uuid4())}
+  zero_id=call(route,zero,method='PUT')[0]['id'];assert book()['positions'][0]['quantity']==0
+  assert book()['cash']==before['cash']
+  call('investments/events/'+str(zero_id)+'/void',{})
+  assert book()['positions'][0]['quantity']==10
   # Base account and preexisting values survive additive migration and restart.
   assert any(a['id']==old and a['value_cny']==100 for a in call('accounts')[0]['accounts'])
  finally:
