@@ -583,6 +583,7 @@ db.exec(`
  CREATE TABLE IF NOT EXISTS investment_securities(id INTEGER PRIMARY KEY,market TEXT NOT NULL,symbol TEXT NOT NULL,name TEXT NOT NULL,currency TEXT NOT NULL,exchange TEXT NOT NULL,UNIQUE(market,symbol,exchange));
  CREATE TABLE IF NOT EXISTS investment_events(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES investment_books(account_id),security_id INTEGER REFERENCES investment_securities(id),type TEXT NOT NULL,day TEXT NOT NULL,quantity REAL NOT NULL DEFAULT 0,price REAL NOT NULL DEFAULT 0,fee REAL NOT NULL DEFAULT 0,currency TEXT NOT NULL,amount REAL NOT NULL DEFAULT 0,request_id TEXT NOT NULL UNIQUE,request_body TEXT NOT NULL,voided INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
  CREATE TABLE IF NOT EXISTS investment_quotes(security_id INTEGER PRIMARY KEY REFERENCES investment_securities(id),price REAL NOT NULL,quoted_at TEXT NOT NULL,source TEXT NOT NULL,received_at TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS investment_daily_sync(day TEXT PRIMARY KEY,status TEXT NOT NULL,attempts INTEGER NOT NULL,attempted_ms INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS investment_quote_jobs(id INTEGER PRIMARY KEY,attempted_at TEXT NOT NULL,updated INTEGER NOT NULL,message TEXT NOT NULL);
 `);
 const invRound=n=>Math.round((n+Number.EPSILON)*100)/100;
@@ -638,7 +639,7 @@ function invSync(accountId,strict=false){
 function invSyncAll(){for(const b of db.prepare('SELECT account_id FROM investment_books').all())invSync(b.account_id);}
 function invOverview(){
  const books=db.prepare('SELECT a.id,a.name FROM investment_books b JOIN accounts a ON a.id=b.account_id ORDER BY a.id').all().map(a=>({...invValuation(a.id),id:a.id,name:a.name}));
- return {books,providerConfigured:Boolean(process.env.HENGZI_MARKET_API_KEY),quoteSchedule:'配置 Twelve Data 后每 15 分钟刷新；市场权限与报价时延取决于数据订阅',latestJob:db.prepare('SELECT * FROM investment_quote_jobs ORDER BY id DESC LIMIT 1').get()||null};
+ return {books,providerConfigured:Boolean(process.env.HENGZI_MARKET_API_KEY),quoteSchedule:'每天北京时间 10:00 后同步前一天及之前最近交易日的收盘价；休市沿用最近收盘价',latestJob:db.prepare('SELECT * FROM investment_quote_jobs ORDER BY id DESC LIMIT 1').get()||null};
 }
 function invAtomic(fn){db.exec('BEGIN IMMEDIATE');try{const r=fn();db.exec('COMMIT');return r;}catch(e){db.exec('ROLLBACK');throw e;}}
 function invSaveEvent(accountId,b){
@@ -669,23 +670,34 @@ function invSaveEvent(accountId,b){
 }
 let invQuotePending=null,invLastAttempt=0;
 async function invRefreshQuotes(){
- const key=process.env.HENGZI_MARKET_API_KEY;if(!key)invError('未配置行情服务。请在服务器设置 HENGZI_MARKET_API_KEY；可先维护参考报价',503);
+ const key=process.env.HENGZI_MARKET_API_KEY;if(!key)invError('尚未更新：未配置行情服务。请在服务器设置 HENGZI_MARKET_API_KEY；保留上次价格，可维护参考报价',503);
  if(invQuotePending)return invQuotePending;if(Date.now()-invLastAttempt<60000)invError('行情刚刷新过，请一分钟后重试',429);invLastAttempt=Date.now();
  invQuotePending=(async()=>{let updated=0;const errors=[];
   const securities=db.prepare('SELECT DISTINCT s.* FROM investment_securities s JOIN investment_events e ON e.security_id=s.id WHERE e.voided=0').all();
   for(const s of securities){try{
-   const u=new URL('https://api.twelvedata.com/quote');u.search=new URLSearchParams({symbol:s.symbol,exchange:s.exchange,apikey:key,timezone:'UTC'});
-   const response=await fetch(u,{signal:AbortSignal.timeout(10000)}),q=await response.json(),price=Number(q.close);
-   if(!response.ok||q.status==='error'||!Number.isFinite(price)||price<=0||q.currency!==s.currency||q.exchange!==s.exchange||String(q.symbol).toUpperCase()!==s.symbol)throw Error('报价未通过证券、币种或价格校验');
-   const raw=String(q.datetime||''),ms=Date.parse(raw.includes('T')?(raw.endsWith('Z')?raw:raw+'Z'):raw.replace(' ','T')+'Z');
-   if(!Number.isFinite(ms)||ms>Date.now()+300000)throw Error('报价时间无效');
-   const prior=db.prepare('SELECT * FROM investment_quotes WHERE security_id=?').get(s.id);if(prior&&ms<Date.parse(prior.quoted_at))throw Error('较旧报价已忽略');
-   db.prepare('INSERT INTO investment_quotes VALUES (?,?,?,?,?) ON CONFLICT(security_id) DO UPDATE SET price=excluded.price,quoted_at=excluded.quoted_at,source=excluded.source,received_at=excluded.received_at').run(s.id,price,new Date(ms).toISOString(),'Twelve Data（时延取决权限）',new Date().toISOString());updated++;
-  }catch{errors.push(s.symbol+'：刷新失败，保留原报价');}}
-  invAtomic(invSyncAll);const message=errors.join('；')||(securities.length?'报价已更新':'暂无证券需要更新');db.prepare('INSERT INTO investment_quote_jobs(attempted_at,updated,message) VALUES (?,?,?)').run(new Date().toISOString(),updated,message);return {updated,message};
+   const targetDay=changeDay(shanghaiDay(),-1);
+   const u=new URL('https://api.twelvedata.com/time_series');u.search=new URLSearchParams({symbol:s.symbol,exchange:s.exchange,apikey:key,interval:'1day',end_date:targetDay+' 23:59:59',outputsize:'5',order:'desc',adjust:'none'});
+   const response=await fetch(u,{signal:AbortSignal.timeout(10000)}),q=await response.json(),meta=q.meta;
+   if(!response.ok||q.status==='error'||meta?.currency!==s.currency||meta?.exchange!==s.exchange||String(meta?.symbol).toUpperCase()!==s.symbol||!Array.isArray(q.values))throw Error('日线未通过证券或币种校验');
+   const bar=q.values.filter(b=>validTxDay(b.datetime)&&b.datetime<=targetDay&&Number.isFinite(Number(b.close))&&Number(b.close)>0).sort((a,b)=>b.datetime.localeCompare(a.datetime))[0];
+   if(!bar)throw Error('没有目标日及之前的有效收盘价');
+   const price=Number(bar.close),prior=db.prepare('SELECT * FROM investment_quotes WHERE security_id=?').get(s.id);
+   if(prior?.source.startsWith('Twelve Data 日收盘价')&&bar.datetime<prior.quoted_at.slice(0,10))throw Error('较旧收盘价已忽略');
+   db.prepare('INSERT INTO investment_quotes VALUES (?,?,?,?,?) ON CONFLICT(security_id) DO UPDATE SET price=excluded.price,quoted_at=excluded.quoted_at,source=excluded.source,received_at=excluded.received_at').run(s.id,price,bar.datetime,'Twelve Data 日收盘价（交易所当地交易日）',new Date().toISOString());updated++;
+  }catch{errors.push(s.symbol+'：尚未更新（抓取失败），保留旧价格及原报价日期');}}
+  invAtomic(invSyncAll);const message=errors.join('；')||(securities.length?'报价已更新':'暂无证券需要更新');db.prepare('INSERT INTO investment_quote_jobs(attempted_at,updated,message) VALUES (?,?,?)').run(new Date().toISOString(),updated,message);return {updated,message,failed:errors.length};
  })().finally(()=>{invQuotePending=null;});return invQuotePending;
 }
-setInterval(()=>{if(process.env.HENGZI_MARKET_API_KEY)invRefreshQuotes().catch(()=>{});},15*60000).unref();
+async function invDailyQuotes(now=Date.now()){
+ if(!process.env.HENGZI_MARKET_API_KEY||!db.prepare('SELECT id FROM investment_events WHERE security_id IS NOT NULL AND voided=0 LIMIT 1').get())return;
+ const day=shanghaiDay(now),clock=new Date(now).toLocaleTimeString('en-GB',{timeZone:'Asia/Shanghai',hour12:false});
+ if(clock<'10:00:00')return;
+ const job=db.prepare('SELECT * FROM investment_daily_sync WHERE day=?').get(day);
+ if(job&&(job.status==='success'||job.attempts>=3||now-job.attempted_ms<3600000))return;
+ db.prepare("INSERT INTO investment_daily_sync VALUES (?,'running',1,?) ON CONFLICT(day) DO UPDATE SET status='running',attempts=attempts+1,attempted_ms=excluded.attempted_ms").run(day,now);
+ try{const r=await invRefreshQuotes();db.prepare('UPDATE investment_daily_sync SET status=? WHERE day=?').run(r.failed?'failed':'success',day);}catch{db.prepare("UPDATE investment_daily_sync SET status='failed' WHERE day=?").run(day);}
+}
+setInterval(()=>invDailyQuotes().catch(()=>{}),60000).unref();
 async function investmentApi(req,res,pathname){
  if(!pathname.startsWith('/api/investments'))return false;
  try{

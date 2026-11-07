@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory() as tmp:
  const fs=require('fs');global.fetch=async url=>{
  if(String(url).includes('ecb.europa.eu'))return {ok:true,text:async()=>`<Cube time='${new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'})}'><Cube currency='USD' rate='1'/><Cube currency='HKD' rate='8'/><Cube currency='CNY' rate='7.1'/></Cube>`};
  const p=JSON.parse(fs.readFileSync('quotes.json','utf8'));if(p.fail)throw Error('offline');
- const u=new URL(url);return {ok:true,json:async()=>({symbol:u.searchParams.get('symbol'),exchange:u.searchParams.get('exchange'),currency:'USD',close:p.price,datetime:p.datetime})};};
+ const u=new URL(url);if(u.pathname!=='/time_series'||u.searchParams.get('interval')!=='1day'||u.searchParams.get('adjust')!=='none')throw Error('unexpected quote request');return {ok:true,json:async()=>({meta:{symbol:u.searchParams.get('symbol'),exchange:u.searchParams.get('exchange'),currency:p.currency||'USD'},values:p.values||[{datetime:p.datetime,close:p.price}]})};};
  """)
  with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
  env={**os.environ,'PORT':str(port),'APP_PASSWORD':secrets.token_urlsafe(24),'HENGZI_MARKET_API_KEY':'test-key-never-returned'}
@@ -21,7 +21,8 @@ with tempfile.TemporaryDirectory() as tmp:
  today=datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
  now=datetime.now(timezone.utc).replace(microsecond=0)
  def quotes(**values):(app/'quotes.json').write_text(json.dumps(values))
- quotes(price='13',datetime=now.strftime('%Y-%m-%d %H:%M:%S'))
+ previous=(datetime.now(ZoneInfo('Asia/Shanghai')).date()-timedelta(days=1)).isoformat()
+ quotes(values=[{'datetime':today,'close':'999'},{'datetime':previous,'close':'13'}])
  def call(path,body=None,method=None,expected=200,auth=True):
   request=Request(f'http://127.0.0.1:{port}/app/fm/api/'+path,data=None if body is None else json.dumps(body).encode(),method=method,headers={'Content-Type':'application/json','Cookie':cookie if auth else ''})
   try:response=urlopen(request,timeout=10)
@@ -91,12 +92,14 @@ with tempfile.TemporaryDirectory() as tmp:
   assert book()['netValueCny']==7952
   # Provider updates and failures: always preserve the last verified quote.
   result=call('investments/quotes/refresh',{})[0];assert result['updated']==1
-  assert book()['positions'][0]['price']==13
+  assert book()['positions'][0]['price']==13 and book()['positions'][0]['quoteDate']==previous
   call('investments/quotes/refresh',{},expected=429)
   assert not call('transactions')[0]['transactions']  # buys and funding aren't household expenses
   stop();quotes(fail=True);start()
   b=book();assert b['positions'][0]['quantity']==10 and b['cash']['USD']==1000
-  result=call('investments/quotes/refresh',{})[0];assert result['updated']==0
+  previous_quote=book()['positions'][0]['quoteDate']
+  result=call('investments/quotes/refresh',{})[0];assert result['updated']==0 and '尚未更新' in result['message']
+  assert book()['positions'][0]['quoteDate']==previous_quote and book()['netValueCny']>0
   assert book()['positions'][0]['price']==13
   call('investments/quotes',{'securityId':sid,'price':1,'quotedAt':'2020-01-01T00:00:00Z'},method='PUT',expected=400)
   assert call('summary')[0]['assets']==book()['netValueCny']+100
