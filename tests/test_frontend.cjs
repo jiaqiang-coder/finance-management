@@ -108,3 +108,20 @@ assert.equal(new Set(ticks.slice(0,5)).size,5);
 assert.equal(vm.runInContext("changeClass(0)",context),'change-neutral');
 assert.equal(vm.runInContext("changeClass(-1,true)",context),'change-positive');
 console.log('PASS chart: distinct large-balance tick labels; zero neutral; decreasing liabilities favourable');
+
+const pie=vm.runInContext(`investmentPieData([{complete:true,cashValueCny:50,positions:[{id:1,name:'苹果',symbol:'AAPL',quantity:2,marketValueCny:100}]},{complete:true,cashValueCny:0,positions:[{id:1,name:'苹果',symbol:'AAPL',quantity:1,marketValueCny:50}]}])`,context);
+assert.equal(pie.total,200);assert.equal(pie.items.length,2);assert.equal(pie.items.find(x=>x.key==='1').value,150);assert.equal(pie.items.find(x=>x.key==='cash').value,50);
+assert.equal(vm.runInContext('investmentPieData([{complete:false,cashValueCny:100,positions:[]}]).complete',context),false);
+assert.equal(vm.runInContext('investmentPieData([]).total',context),0);
+const singles=vm.runInContext(`investmentPieData([{complete:true,cashValueCny:0,positions:[{id:1,name:'单一持仓',symbol:'ONE',quantity:1,marketValueCny:100}]}])`,context);
+assert.equal(singles.items.length,1);assert.equal(singles.items[0].value/singles.total,1);
+console.log('PASS allocation: cross-account security aggregation, cash inclusion, missing valuation guard, empty and single holding');
+
+const grouped=vm.runInContext(`investmentPieData([{complete:true,cashValueCny:10,positions:Array.from({length:8},(_,i)=>({id:i+1,name:'股票'+i,symbol:'S'+i,quantity:1,marketValueCny:10}))}])`,context);
+assert.equal(grouped.total,90);assert.equal(grouped.items.find(p=>p.key==='other').value,20);
+vm.runInContext("state.accounts=[{kind:'asset',category:'很长的股票资产分类',value_cny:100},{kind:'asset',category:'零余额分类',value_cny:0}];renderAllocation()",context);
+assert.match(get('assetAllocation').innerHTML,/allocation-name.*很长的股票资产分类/);
+assert.doesNotMatch(get('assetAllocation').innerHTML,/零余额分类|legend-row/);
+vm.runInContext("state.budgets=[{category:'超支分类',monthly_limit:100,spent:125,warning_threshold:.9}];renderAlerts()",context);
+assert.match(get('#dashboardView .alert-list').innerHTML,/125% 已使用/);assert.match(get('#dashboardView .alert-list').innerHTML,/超支 ¥25/);assert.match(get('#dashboardView .alert-list').innerHTML,/aria-valuenow="100"/);
+console.log('PASS dashboard: zero rows omitted, independent row layout, overspend status and bounded progress; pie grouping preserves totals');
