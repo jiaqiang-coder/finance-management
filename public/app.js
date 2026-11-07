@@ -1,6 +1,7 @@
 var editingAccountId = null;
 const titles = {
   dashboard: '资产总览',
+  investments: '金融投资',
   fx:'汇率管理',
   accounts: '资产账户',
   transactions: '收支流水',
@@ -54,12 +55,15 @@ function switchView(name) {
   document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === `${name}View`));
   document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === name));
   document.getElementById('pageTitle').textContent = titles[name];
+  document.querySelector('.top-actions').hidden=name!=='transactions';
+  if(name==='investments')loadInvestments();
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (name === 'dashboard') loadTrend();
   if (name === 'fx') loadFxManagement().catch(e=>showToast(e.message));
   if (name === 'accounts') loadAccounts();
   if (name === 'transactions') loadTransactions();
   if (name === 'budgets') loadBudgets();
+  if(name==='reports')loadAssetAnalysis();
   if (name === 'reports') loadReport(document.querySelector('[data-period].active')?.dataset.period || 'month');
 }
 
@@ -78,7 +82,7 @@ async function loadSummary() {
   values[1].textContent = money.format(summary.assets);
   values[2].textContent = money.format(summary.liabilities);
   values[3].textContent = money.format(summary.disposable);
-  values[0].closest('.metric').querySelector('.metric-foot').textContent = '暂无历史估值，暂不计算月度变化';
+  values[0].closest('.metric').querySelector('.metric-foot').textContent = '人民币 · 当前账户余额';
   values[1].closest('.metric').querySelector('.metric-foot').textContent = '按账户当前人民币价值汇总';
   values[2].closest('.metric').querySelector('.metric-foot').textContent = '按当前负债账户汇总';
   const foot = values[3].closest('.metric').querySelector('.metric-foot');
@@ -109,7 +113,7 @@ async function loadAccounts() {
       <td>${escapeHtml(account.currency)}<br><small>${Number(account.original_value).toLocaleString('zh-CN')}</small></td>
       <td>${escapeHtml(account.update_method)}${account.fx_mode==='auto'&&account.fx_rate?`<br><small>汇率 ${Number(account.fx_rate).toFixed(6)} · ${escapeHtml(account.fx_updated_at||'')}</small>`:''}</td>
       <td class="num ${value < 0 ? 'down' : ''}">${money.format(value)}</td>
-      <td class="num"><button class="btn" data-edit-account="${account.id}">编辑</button></td>
+      <td class="num">${account.investment_linked?'<button class="btn" data-jump-investment>管理持仓</button>':`<button class="btn" data-edit-account="${account.id}">编辑</button>`}</td>
     </tr>`;
   }).join('');
   const assetTotal = state.accounts.filter(account => account.kind === 'asset').reduce((sum, account) => sum + account.value_cny, 0);
@@ -120,9 +124,13 @@ async function loadAccounts() {
   summaryValues[1].textContent = money.format(propertyTotal);
   summaryValues[2].textContent = money.format(liabilityTotal);
   document.querySelectorAll('[data-edit-account]').forEach(btn=>btn.addEventListener('click',()=>openAccountEditor(Number(btn.dataset.editAccount))));
+  document.querySelectorAll('[data-jump-investment]').forEach(b=>b.onclick=()=>switchView('investments'));
+  applyAccountFilters();
   renderAllocation();
   fillAccountSelect();
 }
+
+function applyAccountFilters(){const keyword=document.getElementById('accountSearch').value.toLowerCase(),kind=document.getElementById('accountKindFilter')?.value||'全部类型';document.querySelectorAll('#accountsTable tbody tr').forEach((row,i)=>{const a=state.accounts[i],matches=kind==='全部类型'||(kind==='负债'?a?.kind==='liability':kind==='投资资产'?/股票|基金|投资/.test(a?.category||''):/现金|银行|支付/.test(a?.category||''));row.hidden=!row.textContent.toLowerCase().includes(keyword)||!matches;});}
 
 function labelForType(type) {
   return { income: '收入', expense: '支出', transfer: '转账', trade: '证券交易', repayment: '还款' }[type] || type;
@@ -239,6 +247,7 @@ async function loadReport(period) {
   document.getElementById('reportRate').textContent = `${(report.savingsRate * 100).toFixed(1)}%`;
   document.getElementById('reportSubtitle').textContent = `${report.from} — ${report.to}`;
   document.getElementById('reportSavings').textContent='结余 '+format(report.savings);
+  renderCashflowChart(report);
   const list = document.querySelector('#reportsView .bar-list');
   if (!report.categories.length) list.textContent='本期暂无支出';
   const max = Math.max(...report.categories.map(item => item.amount), 1);
@@ -430,6 +439,11 @@ async function start() {
   setupBudgetForm();
   bindEvents();
   bindTrend();
+  bindInvestments();
+  document.querySelectorAll('[data-report-tab]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-report-tab]').forEach(n=>n.classList.toggle('active',n===b));document.getElementById('assetAnalysisPanel').hidden=b.dataset.reportTab!=='assets';document.getElementById('cashAnalysisPanel').hidden=b.dataset.reportTab!=='cash';if(b.dataset.reportTab==='assets')loadAssetAnalysis();else loadReport(activeReportPeriod());});
+  document.getElementById('accountKindFilter').addEventListener('change',applyAccountFilters);
+  document.getElementById('accountSearch').addEventListener('input',applyAccountFilters);
+  window.addEventListener('resize',()=>{if(document.getElementById('dashboardView').classList.contains('active'))renderTrend();});
   refreshIcons();
   await Promise.all([loadSummary(), loadAccounts(), loadTransactions(), loadBudgets(), loadTrend()]);
   document.querySelector('.sync').textContent='已从服务器读取数据';
@@ -587,42 +601,105 @@ async function loadTrend(day){
     trendElement('trendDateLabel').hidden=true;
   }
 }
+function changeClass(value,invert=false){if(!Number.isFinite(value)||Math.abs(value)<.005)return 'change-neutral';return (invert?-value:value)>0?'change-positive':'change-negative';}
+function changeText(value,currency='CNY'){if(!Number.isFinite(value))return '暂无可比数据';if(Math.abs(value)<.005)return '— 无变化';return (value>0?'+':'−')+trendFormat(Math.abs(value),currency);}
 function renderTrend(){
-  if(!trendData)return;
-  const currency=trendElement('trendCurrency').value,metric=trendElement('trendMetric').value;
-  const format=value=>trendFormat(value,currency);
-  const {points,detail,today,firstDay}=trendData;
-  trendElement('trendToday').textContent='今日（未结算）：'+format(today.totals[currency]?.[metric]);
-  const chart=trendElement('trendChart');
-  const values=points.map(point=>point.totals[currency]?.[metric]);
-  const available=values.filter(Number.isFinite);
-  if(!available.length){
-    chart.textContent=points.length?'暂无可用的折算汇率，未绘制这些日期。':'从 '+firstDay+' 开始记录，等待首个日终快照。';
-  }else{
-    const min=Math.min(...available),max=Math.max(...available),span=max-min;
-    const xy=(v,i)=>[22+596*(points.length===1?.5:i/(points.length-1)),span===0?75:20+110*(max-v)/span];
-    let paths=[],segment=[];
-    const dots=values.map((v,i)=>{
-      if(!Number.isFinite(v)){if(segment.length)paths.push(segment);segment=[];return '';}
-      const [x,y]=xy(v,i);segment.push(`${x},${y}`);
-      return `<circle cx="${x}" cy="${y}" r="4" fill="#346b9d"><title>${escapeHtml(points[i].day)} · ${escapeHtml(format(v))}</title></circle>`;
-    });
-    if(segment.length)paths.push(segment);
-    chart.innerHTML=`<svg viewBox="0 0 640 155" role="img" aria-label="日终趋势，详细金额可按日期选择" style="width:100%;max-height:220px"><path d="M22 20V138H618" stroke="#ccd3cc" fill="none"/>${paths.map(p=>`<polyline points="${p.join(' ')}" stroke="#346b9d" stroke-width="2" fill="none"/>`).join('')}${dots.join('')}</svg><div class="toolbar"><span>${escapeHtml(points[0].day)}</span><span>${escapeHtml(points.at(-1).day)}</span></div>`;
-  }
-  const panel=trendElement('trendDetail');
-  if(!detail){panel.textContent='';return;}
-  const change=points.find(point=>point.day===detail.day)?.changes?.[currency]?.[metric];
-  const usd=detail.fx?.rates.USD;
-  const rows=detail.items.filter(item=>metric==='netWorth'||item.kind===(metric==='assets'?'asset':'liability'));
-  panel.innerHTML=`<p><strong>${escapeHtml(detail.day)} 日终：${escapeHtml(format(detail.totals[currency]?.[metric]))}</strong></p>
-    <p>${change?`较前日 ${escapeHtml(format(change.delta))} · 汇率影响 ${escapeHtml(format(change.fxImpact))} · 其他变动 ${escapeHtml(format(change.otherChange))}`:'暂无可比较的上一日金额'}</p>
-    <p class="metric-foot">参考报价日：${escapeHtml(detail.fx?.quotedAt||'无')}。手动估值或无法匹配前日汇率的账户，其人民币估值变动计入其他变动；美元口径另包含人民币折美元的汇率影响。</p>
-    <ul>${rows.map(item=>{
-      const sign=metric==='netWorth'&&item.kind==='liability'?-1:1;
-      const amount=currency==='CNY'?sign*item.value_cny:usd>0?sign*item.value_cny/usd:null;
-      return `<li>${escapeHtml(item.name)} · ${escapeHtml(String(item.original_value))} ${escapeHtml(item.currency)} → ${escapeHtml(format(amount))}${item.fx_updated_at?' · 估值汇率日 '+escapeHtml(item.fx_updated_at):item.fx_mode==='manual'?' · 手动估值':''}</li>`;
-    }).join('')}</ul>`;
+ if(!trendData)return;
+ const currency=trendElement('trendCurrency').value,metric=trendElement('trendMetric').value,format=value=>trendFormat(value,currency),{points,detail,today,firstDay}=trendData;
+ trendElement('trendToday').textContent='今日（未结算）：'+format(today.totals[currency]?.[metric]);
+ const chart=trendElement('trendChart'),values=points.map(p=>p.totals[currency]?.[metric]),available=values.filter(Number.isFinite);
+ if(!available.length){chart.innerHTML='<div class="trend-empty">'+escapeHtml(points.length?'缺少可用折算汇率，请先检查汇率管理。':'从 '+firstDay+' 开始记录，等待首个日终快照。')+'</div>';}
+ else{
+  const w=Math.max(280,Math.round(chart.getBoundingClientRect?.().width||640)),h=280,left=78,right=22,top=28,bottom=37,low=Math.min(...available),high=Math.max(...available),padding=Math.max((high-low)*.14,Math.abs(high)*.005,1),min=low-padding,max=high+padding;
+  const x=i=>left+(w-left-right)*(points.length===1?.5:i/(points.length-1)),y=v=>top+(h-top-bottom)*(max-v)/(max-min);
+  let grid='',labels='',paths=[],segment=[],dots='';
+  for(let j=0;j<5;j++){const value=min+(max-min)*j/4,yy=y(value),unit=Math.max(Math.abs(min),Math.abs(max))>=1e8?1e8:Math.max(Math.abs(min),Math.abs(max))>=1e4?1e4:1,precision=Math.max(0,Math.min(5,Math.ceil(-Math.log10((max-min)/4/unit)))),label=new Intl.NumberFormat('zh-CN',{minimumFractionDigits:precision,maximumFractionDigits:precision}).format(value/unit)+(unit===1e8?'亿':unit===1e4?'万':'');grid+=`<line x1="${left}" x2="${w-right}" y1="${yy}" y2="${yy}" stroke="#e5e9ed"/><text x="${left-10}" y="${yy+4}" text-anchor="end" fill="#68777f" font-size="12">${label}</text>`;}
+  const ticks=Math.min(points.length,w<450?3:5);for(let j=0;j<ticks;j++){const i=ticks===1?0:Math.round(j*(points.length-1)/(ticks-1));labels+=`<text x="${x(i)}" y="${h-10}" text-anchor="${ticks===1?'middle':j===0?'start':j===ticks-1?'end':'middle'}" fill="#68777f" font-size="12">${escapeHtml(points[i].day.slice(5).replace('-','/'))}</text>`;}
+  values.forEach((v,i)=>{if(!Number.isFinite(v)){if(segment.length)paths.push(segment);segment=[];return;}segment.push(`${x(i)},${y(v)}`);dots+=`<circle cx="${x(i)}" cy="${y(v)}" r="4" fill="#fff" stroke="#19775f" stroke-width="2"/><circle cx="${x(i)}" cy="${y(v)}" r="14" fill="transparent" role="button" tabindex="0" data-trend-day="${points[i].day}" aria-label="${points[i].day} ${escapeHtml(format(v))}"><title>${points[i].day} · ${escapeHtml(format(v))}</title></circle>`;});if(segment.length)paths.push(segment);
+  chart.innerHTML=`<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="日终资产趋势，纵轴金额，横轴日期"><text x="${left}" y="15" fill="#68777f" font-size="12">金额 · ${currency}</text>${grid}${paths.map(p=>`<polyline points="${p.join(' ')}" stroke="#19775f" stroke-width="2.5" fill="none"/>`).join('')}${dots}${labels}</svg>`;
+  chart.querySelectorAll('[data-trend-day]').forEach(node=>{const select=()=>loadTrend(node.dataset.trendDay);node.onclick=select;node.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}};node.onfocus=node.onmouseenter=()=>{const i=points.findIndex(p=>p.day===node.dataset.trendDay);const r=trendElement('trendReadout');if(r)r.textContent=node.dataset.trendDay+' · '+format(values[i]);};});
+ }
+ const panel=trendElement('trendDetail');if(!detail){panel.textContent='';return;}
+ const change=points.find(p=>p.day===detail.day)?.changes?.[currency]?.[metric],invert=metric==='liabilities',usd=detail.fx?.rates.USD;
+ const rows=detail.items.filter(i=>metric==='netWorth'||i.kind===(metric==='assets'?'asset':'liability'));
+ panel.innerHTML=`<div class="change-grid">${[['较前日',change?.delta],['汇率影响',change?.fxImpact],['其他变动',change?.otherChange]].map(([label,v])=>`<div><span>${label}</span><strong class="${changeClass(v,invert)}">${escapeHtml(changeText(v,currency))}</strong></div>`).join('')}</div><details class="snapshot-details"><summary>${detail.day} 日终 ${escapeHtml(format(detail.totals[currency]?.[metric]))} · 查看账户明细和估值口径</summary><div class="table-wrap"><table class="snapshot-table"><thead><tr><th>账户</th><th>原币金额</th><th class="num">折算价值</th></tr></thead><tbody>${rows.map(item=>{const sign=metric==='netWorth'&&item.kind==='liability'?-1:1,amount=currency==='CNY'?sign*item.value_cny:usd>0?sign*item.value_cny/usd:null;return `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(String(item.original_value))} ${escapeHtml(item.currency)}</td><td class="num">${escapeHtml(format(amount))}</td></tr>`;}).join('')}</tbody></table></div><p class="investment-small">参考报价日：${escapeHtml(detail.fx?.quotedAt||'无')}。手动估值与不可比账户变化计入其他变动，其他变动不等于投资收益。今日实时值不计入日终曲线。</p></details>`;
+ const headline=document.querySelector('#dashboardView .metric .metric-foot'),last=points.at(-1);if(headline&&last?.totals.CNY&&today.totals.CNY){const diff=today.totals.CNY.netWorth-last.totals.CNY.netWorth;headline.innerHTML=`<span class="${changeClass(diff)}">${escapeHtml(changeText(diff))}</span> · 较最近日终`;}
+}
+let assetAnalysisData=null;
+async function loadAssetAnalysis(){
+ const panel=document.getElementById('assetAnalysisPanel');if(!panel)return;
+ try{assetAnalysisData=await api('/app/fm/api/trend?days=30');renderAssetAnalysis();}catch(e){panel.textContent='资产分析加载失败：'+e.message;}
+}
+function renderAssetAnalysis(){
+ const panel=document.getElementById('assetAnalysisPanel'),data=assetAnalysisData;if(!panel||!data)return;
+ const first=data.points[0],last=data.points.at(-1),delta=first?.totals.CNY&&last?.totals.CNY?last.totals.CNY.netWorth-first.totals.CNY.netWorth:null;
+ const assets=state.accounts.filter(a=>a.kind==='asset'),total=assets.reduce((n,a)=>n+a.value_cny,0),groups={};for(const a of assets)groups[a.category]=(groups[a.category]||0)+a.value_cny;
+ const cash=assets.filter(a=>/银行|现金|支付/.test(a.category)).reduce((n,a)=>n+a.value_cny,0),debt=state.accounts.filter(a=>a.kind==='liability').reduce((n,a)=>n+a.value_cny,0);
+ panel.innerHTML=`<div class="investment-summary"><article class="card investment-stat"><span class="metric-label">区间期初净资产</span><strong>${first?.totals.CNY?money.format(first.totals.CNY.netWorth):'—'}</strong><small>${first?.day||'等待日终快照'}</small></article><article class="card investment-stat"><span class="metric-label">区间期末净资产</span><strong>${last?.totals.CNY?money.format(last.totals.CNY.netWorth):'—'}</strong><small>${last?.day||'等待日终快照'}</small></article><article class="card investment-stat"><span class="metric-label">已记录区间净变动</span><strong class="${changeClass(delta)}">${changeText(delta)}</strong><small>近 30 天实际可用日终 · 不等于投资收益</small></article></div><div class="analysis-pair"><article class="card section-card"><h2>当前资产配置</h2>${Object.entries(groups).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<div class="investment-bar-row"><span>${escapeHtml(k)}</span><div class="investment-bar"><span style="width:${total?v/total*100:0}%"></span></div><span class="num">${total?(v/total*100).toFixed(1):'0'}%</span></div>`).join('')||'<p class="empty-state">暂无资产账户</p>'}</article><article class="card section-card"><h2>流动性与负债</h2><div class="investment-cash-row"><span>银行、现金与支付账户</span><span>${money.format(cash)}</span></div><div class="investment-cash-row"><span>负债合计</span><span>${money.format(debt)}</span></div><div class="investment-cash-row"><span>负债 / 总资产</span><span>${total?(debt/total*100).toFixed(1)+'%':'—'}</span></div><p class="investment-small">投资账户内现金在金融投资页单独展示，不据此推算家庭安全垫；受限资产按账户分类识别。</p></article></div><article class="card section-card" style="margin:24px 0"><h2>币种分布</h2><p class="investment-small">投资账户为人民币汇总账户，内部币种敞口请进入金融投资查看现金与持仓，不能按账户报表币种推断。</p>${['CNY','USD','HKD'].map(c=>`<div class="investment-cash-row"><span>${c} 非投资资产</span><span>${money.format(assets.filter(a=>!a.investment_linked&&a.currency===c).reduce((n,a)=>n+a.value_cny,0))}</span></div>`).join('')}</article>`;
+}
+function renderCashflowChart(report){
+ const node=document.getElementById('cashflowChart');if(!node)return;
+ const rows=report.daily||[];const out=document.getElementById('cashflowOutflow');if(out)out.textContent='实际现金流出 '+txMoney(report.cash_outflow||0,report.currency)+'；其中消费及利息 '+txMoney(report.expense,report.currency)+'。';
+ if(!rows.length){node.innerHTML='<p class="empty-state">本期暂无该币种流水</p>';return;}
+ const w=Math.max(280,Math.round(node.getBoundingClientRect?.().width||640)),h=260,l=70,r=15,t=25,b=40,max=Math.max(1,...rows.flatMap(x=>[x.income,x.expense])),step=(w-l-r)/rows.length,bw=Math.min(18,step*.3);let s='';
+ for(let i=0;i<5;i++){const v=max*i/4,y=h-b-(h-t-b)*i/4;s+=`<line x1="${l}" x2="${w-r}" y1="${y}" y2="${y}" stroke="#e5e9ed"/><text x="${l-8}" y="${y+4}" text-anchor="end" font-size="12" fill="#68777f">${new Intl.NumberFormat('zh-CN',{notation:'compact',maximumFractionDigits:1}).format(v)}</text>`;}
+ rows.forEach((row,i)=>{const mid=l+step*(i+.5);[row.income,row.expense].forEach((v,j)=>{const height=(h-t-b)*v/max;s+=`<rect x="${mid+(j?1:-bw-1)}" y="${h-b-height}" width="${bw}" height="${height}" fill="${j?'#acb7bd':'#19775f'}"><title>${row.day} ${j?'支出':'收入'} ${escapeHtml(txMoney(v,report.currency))}</title></rect>`;});if(i===0||i===rows.length-1||i===Math.floor(rows.length/2))s+=`<text x="${mid}" y="${h-12}" text-anchor="${i===0?'start':i===rows.length-1?'end':'middle'}" fill="#68777f" font-size="12">${row.day.slice(5)}</text>`;});
+ node.innerHTML=`<p class="investment-small">收入（绿） · 支出（灰） · ${report.currency}</p><svg viewBox="0 0 ${w} ${h}" role="img" aria-label="本期每日收支金额，横轴日期，纵轴金额"><text x="${l}" y="14" font-size="12" fill="#68777f">金额 · ${report.currency}</text>${s}</svg>`;
+}
+
+let investmentData=null,investmentRequest=0,investmentRequestId=null,investmentBusy=false;
+const investmentTypes={opening:'期初持仓',buy:'买入',sell:'卖出',cash_opening:'期初现金',deposit:'入金',withdraw:'出金'};
+function investmentBooks(){const id=Number(el('investmentAccount').value);return (investmentData?.books||[]).filter(b=>!id||b.id===id);}
+function investmentTab(name){document.querySelectorAll('[data-invest-tab]').forEach(b=>b.classList.toggle('active',b.dataset.investTab===name));document.querySelectorAll('[data-invest-panel]').forEach(p=>p.hidden=p.dataset.investPanel!==name);}
+async function loadInvestments(){
+ const request=++investmentRequest;try{
+  const result=await api('/app/fm/api/investments');if(request!==investmentRequest)return;
+  investmentData=result;const select=el('investmentAccount'),prior=select.value;select.innerHTML='<option value="">全部账户</option>'+result.books.map(b=>`<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('');select.value=result.books.some(b=>String(b.id)===prior)?prior:result.books.length===1?String(result.books[0].id):'';renderInvestments();
+ }catch(e){if(request===investmentRequest)el('investmentStatus').textContent='投资数据加载失败：'+e.message;}
+}
+function renderInvestments(){
+ if(!investmentData)return;const books=investmentBooks(),complete=books.every(b=>b.complete),sum=k=>books.reduce((n,b)=>n+(b[k]||0),0),positions=books.flatMap(b=>b.positions.map(p=>({...p,bookId:b.id,bookName:b.name}))),held=positions.filter(p=>p.quantity>0);
+ const status=[books.length?`已读取 ${books.length} 个账户；数据保存在服务器。`:'先新建投资账户，或关联现有股票资产，避免重复统计。',investmentData.providerConfigured?'行情服务已配置，每 15 分钟更新；实际覆盖与延迟取决于数据订阅。':'未配置自动行情；录入价格只作参考，可在持仓行维护报价。',...books.filter(b=>!b.complete).map(b=>b.name+' 缺少 '+b.missing.join('、')+'；保留资产总览上次估值。'),...(books.some(b=>b.fx.stale)?['汇率未同步或已过期，请检查汇率管理。']:[]),investmentData.latestJob?.message||''];el('investmentStatus').textContent=status.filter(Boolean).join('\n');
+ for(const [id,key] of [['investmentNet','netValueCny'],['investmentUnrealized','unrealizedCny'],['investmentRealized','realizedCny']]){const n=complete?sum(key):null;el(id).textContent=n===null?'—':id==='investmentNet'?money.format(n):changeText(n);el(id).className=id==='investmentNet'?'':changeClass(n);}
+ const total=complete?sum('netValueCny'):0,allocation=held.slice().sort((a,b)=>(b.marketValueCny||0)-(a.marketValueCny||0)).map(p=>{const percentage=total>0&&p.marketValueCny!==null?p.marketValueCny/total*100:null;return `<div class="investment-bar-row"><span>${escapeHtml(p.name)}</span><div class="investment-bar"><span style="width:${Math.min(100,percentage||0)}%"></span></div><span class="num">${percentage===null?'—':percentage.toFixed(1)+'%'}</span></div>`;}).join('');el('investmentAllocation').innerHTML=allocation||'<p class="empty-state">暂无持仓。先录入期初现金与股票，再记录后续成交。</p>';el('investmentRisk').innerHTML=allocation||'<p class="empty-state">暂无持仓数据</p>';
+ el('investmentCash').innerHTML=books.map(b=>`<p class="investment-small">${escapeHtml(b.name)}</p>${Object.entries(b.cash).map(([c,v])=>`<div class="investment-cash-row"><span>${c}</span><span>${txMoney(v,c)}</span></div>`).join('')}`).join('')||'<p class="empty-state">尚未建立账户</p>';
+ const rows=document.querySelector('#investmentHoldings tbody');rows.innerHTML=held.map(p=>`<tr><td>${escapeHtml(p.name)}<br><small>${escapeHtml(p.symbol)} · ${escapeHtml(p.exchange)}<br>${escapeHtml(p.bookName)}</small></td><td>${p.quantity.toLocaleString('zh-CN',{maximumFractionDigits:6})}</td><td>${txMoney(p.averageCost,p.currency)} / ${p.price===null?'—':txMoney(p.price,p.currency)}<br><small>${escapeHtml(p.quoteSource||'暂无报价')}<br>${escapeHtml(p.quoteDate||'')}</small></td><td class="num">${p.marketValueCny===null?'—':money.format(p.marketValueCny)}<br><span class="${changeClass(p.unrealizedCny)}">${changeText(p.unrealizedCny)}</span></td><td><div class="investment-quote"><button class="btn" data-invest-buy="${p.id}" data-book="${p.bookId}">买</button><button class="btn" data-invest-sell="${p.id}" data-book="${p.bookId}">卖</button><button class="btn" data-invest-quote="${p.id}">报价</button></div></td></tr>`).join('')||'<tr><td colspan="5" class="empty-state">暂无持仓，请添加期初股票或记录买入</td></tr>';
+ document.querySelectorAll('[data-invest-buy],[data-invest-sell]').forEach(b=>b.onclick=()=>{el('investmentAccount').value=b.dataset.book;const id=Number(b.dataset.investBuy||b.dataset.investSell),p=positions.find(p=>p.id===id&&p.bookId===Number(b.dataset.book));openInvestmentEvent(b.dataset.investBuy?'buy':'sell',p);});document.querySelectorAll('[data-invest-quote]').forEach(b=>b.onclick=()=>openInvestmentQuote(positions.find(p=>p.id===Number(b.dataset.investQuote))));
+ const events=books.flatMap(b=>b.events.map((e,i)=>({...e,bookName:b.name,last:i===b.events.length-1,security:b.positions.find(p=>p.id===e.security_id)}))).sort((a,b)=>b.day.localeCompare(a.day)||b.id-a.id);
+ document.querySelector('#investmentRecords tbody').innerHTML=events.map(e=>`<tr><td>${e.day}<br><small>${escapeHtml(e.bookName)}</small></td><td>${investmentTypes[e.type]}<br>${escapeHtml(e.security?.name||e.currency)}</td><td>${e.security?`${e.quantity} 股 / ${txMoney(e.price,e.currency)}<br><small>费用 ${txMoney(e.fee,e.currency)}</small>`:txMoney(e.amount,e.currency)}</td><td>${e.last?`<button class="btn" data-invest-void="${e.id}">撤销最近记录</button>`:'—'}</td></tr>`).join('')||'<tr><td colspan="4" class="empty-state">暂无交易记录</td></tr>';
+ document.querySelectorAll('[data-invest-void]').forEach(b=>b.onclick=async()=>{if(investmentBusy||!confirm('确认撤销这笔记录并回算持仓和现金？历史日终快照保留。'))return;investmentBusy=true;b.disabled=true;try{await api('/app/fm/api/investments/events/'+b.dataset.investVoid+'/void',{method:'POST'});await refreshInvestments();showToast('已撤销并回算');}catch(e){showToast(e.message);}finally{investmentBusy=false;b.disabled=false;}});
+}
+function investmentEventFields(){
+ const type=el('investmentEventType').value,isCash=['cash_opening','deposit','withdraw'].includes(type);el('investmentSecurityFields').hidden=isCash;el('investmentCashFields').hidden=!isCash;el('investmentFee').disabled=type==='opening';if(type==='opening')el('investmentFee').value='0';
+ el('investmentEventNote').textContent=type==='opening'?'期初持仓只建立数量与成本，不重复扣现金；历史费用请计入平均成本。录入价格是参考价，不是实时行情。':isCash?'期初现金仅建立初始余额；入金、出金不作为投资收益，也不自动改动外部银行余额。跨账户转账请同步核对另一账户。':'记录券商已成交结果。买入扣减原币现金，卖出增加现金并确认盈亏；本版不支持卖空或融资。';
+ investmentRequestId=crypto.randomUUID();
+}
+function openInvestmentEvent(type,p){
+ const id=Number(el('investmentAccount').value);if(!id){showToast('请先选择一个投资账户');return;}
+ el('investmentEventPanel').hidden=false;el('investmentCreatePanel').hidden=true;el('investmentEventType').value=type;el('investmentEventDay').value=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Shanghai'});el('investmentEventDay').max=el('investmentEventDay').value;el('investmentEventError').textContent='';
+ el('investmentSymbol').value=p?.symbol||'';el('investmentSecurityName').value=p?.name||'';el('investmentQuantity').value='';el('investmentPrice').value=p?.price??'';el('investmentFee').value='0';if(p)el('investmentMarket').value=p.market+':'+p.exchange;investmentEventFields();
+}
+async function refreshInvestments(){await loadInvestments();await Promise.all([loadAccounts(),loadSummary(),loadTrend()]);if(el('reportsView').classList.contains('active'))await loadAssetAnalysis();}
+async function saveInvestmentEvent(event){
+ event.preventDefault();if(investmentBusy)return;const accountId=Number(el('investmentAccount').value),error=el('investmentEventError');error.textContent='';if(!accountId){error.textContent='请先选择投资账户';return;}
+ const type=el('investmentEventType').value,[market,exchange]=el('investmentMarket').value.split(':'),isCash=['cash_opening','deposit','withdraw'].includes(type),body={type,day:el('investmentEventDay').value,requestId:investmentRequestId||crypto.randomUUID()};
+ if(isCash)Object.assign(body,{currency:el('investmentCashCurrency').value,amount:Number(el('investmentCashAmount').value)});else Object.assign(body,{market,exchange,symbol:el('investmentSymbol').value.trim().toUpperCase(),name:el('investmentSecurityName').value.trim(),quantity:Number(el('investmentQuantity').value),price:Number(el('investmentPrice').value),fee:type==='opening'?0:Number(el('investmentFee').value)});
+ investmentBusy=true;el('investmentEventSave').disabled=true;let saved=false;
+ try{await api('/app/fm/api/investments/accounts/'+accountId+'/events',{method:'POST',body:JSON.stringify(body)});saved=true;el('investmentEventPanel').hidden=true;investmentRequestId=null;await refreshInvestments();showToast('已保存，持仓、现金和账户估值已更新');}
+ catch(e){if(saved)showToast('记录已保存，刷新失败，请重新加载页面');else error.textContent=e.message;}finally{investmentBusy=false;el('investmentEventSave').disabled=false;}
+}
+function openInvestmentQuote(p){
+ let panel=el('investmentQuotePanel');if(panel)panel.remove();panel=document.createElement('article');panel.id='investmentQuotePanel';panel.className='card section-card investment-section';panel.innerHTML=`<h2>维护参考报价 · ${escapeHtml(p.name)}</h2><form id="investmentQuoteForm"><div class="form-grid" style="margin-top:18px"><div class="field"><label for="investmentQuotePrice">每股价格（${p.currency}）</label><input id="investmentQuotePrice" type="number" min="0.000001" step="any" required value="${p.price??''}"></div><div class="field"><label for="investmentQuoteTime">报价时间（浏览器本地时区）</label><input id="investmentQuoteTime" type="datetime-local" required></div></div><p id="investmentQuoteError" class="field-error" role="alert"></p><div class="toolbar-right" style="margin-top:18px"><button class="btn" type="button" id="investmentQuoteCancel">取消</button><button class="btn primary" id="investmentQuoteSave">保存参考报价</button></div></form>`;
+ document.querySelector('[data-invest-panel="holdings"]').prepend(panel);const now=new Date();el('investmentQuoteTime').value=new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,16);el('investmentQuoteCancel').onclick=()=>panel.remove();
+ el('investmentQuoteForm').onsubmit=async e=>{e.preventDefault();if(investmentBusy)return;investmentBusy=true;el('investmentQuoteSave').disabled=true;try{const date=new Date(el('investmentQuoteTime').value);if(!Number.isFinite(+date))throw Error('请填写有效时间');await api('/app/fm/api/investments/quotes',{method:'PUT',body:JSON.stringify({securityId:p.id,price:Number(el('investmentQuotePrice').value),quotedAt:date.toISOString()})});panel.remove();await refreshInvestments();showToast('报价已更新；持股数量与现金保持不变');}catch(e){if(el('investmentQuoteError'))el('investmentQuoteError').textContent=e.message;else showToast(e.message);}finally{investmentBusy=false;if(el('investmentQuoteSave'))el('investmentQuoteSave').disabled=false;}};
+}
+function bindInvestments(){
+ document.querySelectorAll('[data-invest-tab]').forEach(b=>b.onclick=()=>investmentTab(b.dataset.investTab));el('investmentAccount').onchange=()=>{el('investmentEventPanel').hidden=true;const panel=el('investmentQuotePanel');if(panel)panel.remove();renderInvestments();};
+ el('investmentCreate').onclick=()=>{el('investmentCreatePanel').hidden=false;el('investmentEventPanel').hidden=true;el('investmentExisting').innerHTML='<option value="">创建新账户</option>'+state.accounts.filter(a=>a.kind==='asset'&&!a.investment_linked).map(a=>`<option value="${a.id}">${escapeHtml(a.name)} · ${money.format(a.value_cny)}</option>`).join('');el('investmentReplace').checked=false;el('investmentCreateError').textContent='';};
+ el('investmentCreateClose').onclick=()=>el('investmentCreatePanel').hidden=true;el('investmentEventClose').onclick=()=>el('investmentEventPanel').hidden=true;el('investmentOpening').onclick=()=>openInvestmentEvent('opening');el('investmentTrade').onclick=()=>openInvestmentEvent('buy');el('investmentEventType').onchange=investmentEventFields;el('investmentEventForm').onsubmit=saveInvestmentEvent;
+ el('investmentEventForm').addEventListener('input',()=>{investmentRequestId=crypto.randomUUID();});
+ el('investmentCreateForm').onsubmit=async e=>{e.preventDefault();if(investmentBusy)return;investmentBusy=true;el('investmentCreateSave').disabled=true;try{const r=await api('/app/fm/api/investments/accounts',{method:'POST',body:JSON.stringify({name:el('investmentName').value.trim(),existingAccountId:el('investmentExisting').value?Number(el('investmentExisting').value):null,confirmReplace:el('investmentReplace').checked})});el('investmentCreatePanel').hidden=true;await refreshInvestments();el('investmentAccount').value=String(r.id);renderInvestments();openInvestmentEvent('cash_opening');showToast('账户已建立，请核对期初现金和股票');}catch(e){el('investmentCreateError').textContent=e.message;}finally{investmentBusy=false;el('investmentCreateSave').disabled=false;}};
+ el('investmentRefresh').onclick=async()=>{if(investmentBusy)return;investmentBusy=true;el('investmentRefresh').disabled=true;try{const r=await api('/app/fm/api/investments/quotes/refresh',{method:'POST'});await refreshInvestments();showToast(r.message);}catch(e){showToast(e.message);}finally{investmentBusy=false;el('investmentRefresh').disabled=false;}};
 }
 
 start().catch(error => { document.querySelector('.sync').textContent='数据加载失败，请重试'; showToast(error.message); });

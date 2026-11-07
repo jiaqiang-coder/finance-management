@@ -100,3 +100,11 @@ get('trendCurrency').value='CNY';
 vm.runInContext('renderTrend()',context);
 assert.match(get('trendDetail').innerHTML,/汇率影响.*1,000/);
 console.log('PASS trend UI: currency switch, FX attribution, missing live quote and safe account display');
+
+// Narrow value ranges must retain distinct monetary tick labels at large balances.
+vm.runInContext(`trendData.points=[{day:'2026-11-05',totals:{CNY:{assets:14000}}},{day:'2026-11-06',totals:{CNY:{assets:14020}}}];trendData.detail=null;renderTrend();`,context);
+const ticks=[...get('trendChart').innerHTML.matchAll(/text-anchor="end"[^>]*>([^<]+)<\/text>/g)].map(m=>m[1]);
+assert.equal(new Set(ticks.slice(0,5)).size,5);
+assert.equal(vm.runInContext("changeClass(0)",context),'change-neutral');
+assert.equal(vm.runInContext("changeClass(-1,true)",context),'change-positive');
+console.log('PASS chart: distinct large-balance tick labels; zero neutral; decreasing liabilities favourable');

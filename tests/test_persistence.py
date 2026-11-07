@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile,shutil,subprocess,os,urllib.request,urllib.error,json,time,secrets,sqlite3
 src=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory() as t:
- app=Path(t)/'app';shutil.copytree(src,app);env=os.environ.copy();pw=secrets.token_urlsafe(24);env.update(PORT='14174',APP_PASSWORD=pw)
+ app=Path(t)/'app';shutil.copytree(src,app,ignore=shutil.ignore_patterns('.git','data','node_modules','qa-mobile.html'));env=os.environ.copy();pw=secrets.token_urlsafe(24);env.update(PORT='14174',APP_PASSWORD=pw)
  def start():
   p=subprocess.Popen(['node','server.js'],cwd=app,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
   for _ in range(50):
