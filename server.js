@@ -180,14 +180,15 @@ async function revalueAccounts(force=false){
  db.exec('BEGIN');try{for(const c of ['USD','HKD'])db.prepare("UPDATE accounts SET value_cny=ROUND(original_value*?,2),fx_rate=?,fx_updated_at=? WHERE fx_mode='auto' AND currency=?").run(fx.rates[c],fx.rates[c],fx.quotedAt,c);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}invSyncAll();return fx;
 }
 async function accountInput(b){
- const mode=b.fxMode||'manual',currency=b.currency||'CNY';
+ const mode=b.fxMode||'manual',currency=b.currency||'CNY',category=String(b.category||'其他').trim();
+ if(['流动负债','长期负债'].includes(category)&&b.kind!=='liability')throw Error('流动负债和长期负债的账户性质必须为负债');
  if(typeof b.name!=='string'||!b.name.trim()||!['asset','liability'].includes(b.kind)||!['CNY','USD','HKD'].includes(currency)||!['auto','manual'].includes(mode))throw Error('账户名称、性质、币种或折算模式无效');
  const original=b.originalValue===undefined?Number(b.valueCny):b.originalValue;
  if(typeof original!=='number'||!Number.isFinite(original)||original<0)throw Error('原币金额无效');
  let value=b.valueCny,rate=null,quoted=null;
  if(mode==='auto'){if(currency==='CNY'){value=original;rate=1;}else{const fx=await getFx();if(fx.stale)throw Error('当前无法更新官方汇率，请重试或选择手动折算');rate=fx.rates[currency];value=Math.round(original*rate*100)/100;quoted=fx.quotedAt;}}
  if(typeof value!=='number'||!Number.isFinite(value)||value<0)throw Error('人民币价值无效');
- return {name:b.name.trim(),kind:b.kind,category:String(b.category||'其他'),currency,value,original,mode,rate,quoted,note:String(b.note||'')};
+ return {name:b.name.trim(),kind:b.kind,category,currency,value,original,mode,rate,quoted,note:String(b.note||'')};
 }
 async function dailyFx(){
  const day=shanghaiDay(),clock=new Date().toLocaleTimeString('en-GB',{timeZone:'Asia/Shanghai',hour12:false});
@@ -243,6 +244,19 @@ try {
   throw error;
 }
 const firstTrendDay = db.prepare('SELECT first_day FROM trend_config WHERE id=1').get().first_day;
+// Correct only the two built-in debt categories; preserve amounts and frozen snapshots.
+// Existing account-version triggers retain the before/after classification history.
+db.exec(`CREATE TABLE IF NOT EXISTS account_kind_corrections(
+ account_id INTEGER PRIMARY KEY,old_kind TEXT NOT NULL,new_kind TEXT NOT NULL,
+ category TEXT NOT NULL,value_cny REAL NOT NULL,corrected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
+db.exec('BEGIN IMMEDIATE');
+try {
+ db.exec(`INSERT OR IGNORE INTO account_kind_corrections(account_id,old_kind,new_kind,category,value_cny)
+ SELECT id,kind,'liability',category,value_cny FROM accounts WHERE kind='asset' AND category IN ('流动负债','长期负债');
+ UPDATE accounts SET kind='liability' WHERE kind='asset' AND category IN ('流动负债','长期负债');`);
+ db.exec('COMMIT');
+} catch(error){db.exec('ROLLBACK');throw error;}
+
 const moneyCents = value => Math.round(value * 100);
 function totalsFor(items, usdRate, value = item => item.value_cny) {
   let assets=0, liabilities=0;
@@ -372,7 +386,8 @@ function getSummary() {
   const totals = db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN kind = 'asset' THEN value_cny ELSE 0 END), 0) AS assets,
-      COALESCE(SUM(CASE WHEN kind = 'liability' THEN value_cny ELSE 0 END), 0) AS liabilities
+      COALESCE(SUM(CASE WHEN kind = 'liability' THEN value_cny ELSE 0 END), 0) AS liabilities,
+      COALESCE(SUM(CASE WHEN kind = 'liability' AND category = '流动负债' THEN value_cny ELSE 0 END), 0) AS currentLiabilities
     FROM accounts
   `).get();
   const cashflow = db.prepare(`
@@ -385,6 +400,7 @@ function getSummary() {
   return {
     assets: totals.assets,
     liabilities: totals.liabilities,
+    currentLiabilities: totals.currentLiabilities,
     netWorth: totals.assets - totals.liabilities,
     income: cashflow.income,
     expense: cashflow.expense,

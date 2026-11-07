@@ -137,3 +137,7 @@ for(const values of [[1],[99,1],[1,1,1,1,1,1,1,93],[90,1,1,1,1,1,1,4]]){
  for(const right of [false,true]){const side=labels.filter(p=>p.right===right).sort((a,b)=>a.labelY-b.labelY);for(let i=0;i<side.length;i++){assert(side[i].labelY>=28&&side[i].labelY<=248);if(i)assert(side[i].labelY-side[i-1].labelY>=30);}}
 }
 console.log('PASS pie direct labels: visible names and proportions, tiny slices, long names and collision spacing');
+
+get('accountCategory').value='流动负债';get('accountKind').value='asset';vm.runInContext('syncAccountKind()',context);assert.equal(get('accountKind').value,'liability');
+get('accountCategory').value='长期负债';get('accountKind').value='asset';vm.runInContext('syncAccountKind()',context);assert.equal(get('accountKind').value,'liability');
+console.log('PASS account categories: built-in debt categories select liability kind');
