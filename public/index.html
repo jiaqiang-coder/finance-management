@@ -592,7 +592,7 @@ body{line-height:1.6}.sidebar{background:#fff;color:var(--ink);border-right:1px 
   <div class="ai-thread-bar"><select id="aiThreads" aria-label="选择历史对话"><option value="">新对话</option></select><button class="btn" id="aiNewChat">＋ 新对话</button></div>
   <div id="aiMessages" class="ai-messages" aria-live="polite" aria-relevant="additions text"></div>
   <div id="aiError" class="ai-error" role="alert" hidden></div>
-  <form id="aiForm" class="ai-composer"><label class="sr-only" for="aiInput">向衡资 AI 提问</label><textarea id="aiInput" rows="3" maxlength="2000" placeholder="问资产、查流水，或描述你想完成的事…"></textarea><div class="ai-compose-actions"><button type="button" class="btn" id="aiMic" aria-label="语音输入">♩ 语音输入</button><span id="aiInputCount">0 / 2000</span><button class="btn primary" id="aiSend">发送 ↑</button></div><small>相关账本数据将发送至所选模型 · 修改须确认</small></form>
+  <form id="aiForm" class="ai-composer"><label class="sr-only" for="aiInput">向衡资 AI 提问</label><textarea id="aiInput" rows="3" maxlength="2000" placeholder="问资产、查流水，或描述你想完成的事…"></textarea><div class="ai-compose-actions"><span id="aiInputCount">0 / 2000</span><button class="btn primary" id="aiSend">发送 ↑</button></div><small>相关账本数据将发送至所选模型 · 修改须确认</small></form>
  </div>
  <section class="ai-panel" data-ai-panel="reports" hidden><div class="ai-panel-heading"><h3>已保存的分析</h3><p>保留生成时的数据依据，便于回顾。</p></div><div id="aiReportList"></div><article id="aiReportDetail" hidden></article></section>
  <section class="ai-panel" data-ai-panel="settings" hidden><div class="ai-panel-heading"><h3>连接你选择的大模型</h3><p>支持 sub2api 等 OpenAI 兼容网关。填写完整的 Chat Completions 地址，模型名称以服务商提供为准。</p></div>
@@ -603,6 +603,6 @@ body{line-height:1.6}.sidebar{background:#fff;color:var(--ink);border-right:1px 
 <div aria-live="polite" class="toast" id="toast" role="status"></div>
 <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
 
-<script src="/app/fm/app.js?v=agent-harness-20261110"></script>
+<script src="/app/fm/app.js?v=assistant-text-only-20261110"></script>
 </body>
 </html>

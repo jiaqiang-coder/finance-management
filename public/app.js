@@ -735,7 +735,7 @@ function openInvestmentEdit(p){
 }
 
 // Assistant UI keeps secrets out of browser storage and renders model text as escaped text.
-let aiThreadId='',aiThreadList=[],aiConversation={messages:[],actions:[]},aiConfigured=false,aiPollTimer=null,aiRendered='',aiPendingRequest=null,aiFocusReturn=null,aiRecognition=null;
+let aiThreadId='',aiThreadList=[],aiConversation={messages:[],actions:[]},aiConfigured=false,aiPollTimer=null,aiRendered='',aiPendingRequest=null,aiFocusReturn=null;
 const aiSuggestions=['帮我做一次资产体检，先核对资产、负债和现金流，列出需要关注的问题。','近三个月净资产为什么变化？请说明数据依据和缺失部分。','本月各类支出是多少？和我的预算比较一下。','我的现金可以覆盖多久的必要开支？信息不足请先问我。'];
 function aiDate(value){return new Date(value.includes('T')?value:value.replace(' ','T')+'Z').toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'});}
 function aiInline(text){return escapeHtml(text).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');}
@@ -775,7 +775,7 @@ async function aiOpen(prompt){
  try{await aiLoadConfig();await aiLoadThreads();await aiLoadMessages();}catch(e){aiShowError(e.message);}
  el('aiInput').focus({preventScroll:true});
 }
-function aiClose(){el('aiDrawer').hidden=true;el('aiBackdrop').hidden=true;document.body.classList.remove('ai-open');clearTimeout(aiPollTimer);aiRecognition?.stop();aiFocusReturn?.focus();}
+function aiClose(){el('aiDrawer').hidden=true;el('aiBackdrop').hidden=true;document.body.classList.remove('ai-open');clearTimeout(aiPollTimer);aiFocusReturn?.focus();}
 async function aiLoadConfig(){const c=await api('/app/fm/api/assistant/config');aiConfigured=c.configured;el('aiConnection').textContent=c.configured?'已配置 · '+c.model:'尚未连接大模型 · 请先打开 AI 设置';el('aiUrl').value=c.url||'';el('aiModel').value=c.model||'';el('aiKey').value='';el('aiKey').required=!c.hasKey;el('aiShareData').checked=c.configured;el('aiKeyHint').textContent=c.hasKey?'已保存密钥，留空保持不变；更换服务商须重新填写。':c.source==='unreadable'?'原配置无法解密，请重新填写模型与密钥。':'密钥加密保存在服务器，不写入代码或浏览器存储。';return c;}
 async function aiLoadThreads(){const r=await api('/app/fm/api/assistant/threads');aiThreadList=r.threads;if(!aiThreadId&&aiThreadList.length)aiThreadId=aiThreadList[0].id;el('aiThreads').innerHTML='<option value="">新对话</option>'+aiThreadList.map(t=>`<option value="${escapeHtml(t.id)}">${escapeHtml(t.title)}</option>`).join('');el('aiThreads').value=aiThreadId;}
 function aiCount(){el('aiInputCount').textContent=el('aiInput').value.length+' / 2000';}
@@ -818,7 +818,6 @@ function bindAssistant(){
  el('aiNewChat').onclick=()=>{clearTimeout(aiPollTimer);aiThreadId='';aiConversation={messages:[],actions:[]};el('aiThreads').value='';aiShowError('');aiRenderConversation();el('aiInput').focus();};el('aiThreads').onchange=()=>{aiThreadId=el('aiThreads').value;aiShowError('');aiLoadMessages().catch(e=>aiShowError(e.message));};
  el('aiSettingsForm').onsubmit=async e=>{e.preventDefault();el('aiConfigSave').disabled=true;el('aiConfigStatus').textContent='正在保存…';try{await api('/app/fm/api/assistant/config',{method:'PUT',body:JSON.stringify({url:el('aiUrl').value.trim(),model:el('aiModel').value.trim(),key:el('aiKey').value.trim(),shareData:el('aiShareData').checked})});await aiLoadConfig();el('aiConfigStatus').textContent='配置已保存。请测试连接，再返回「对话分析」提问。';}catch(e){el('aiConfigStatus').textContent=e.message;}finally{el('aiConfigSave').disabled=false;}};
  el('aiConfigTest').onclick=async()=>{el('aiConfigTest').disabled=true;el('aiConfigStatus').textContent='正在测试已保存的模型配置…';try{const r=await api('/app/fm/api/assistant/config/test',{method:'POST',body:'{}'});el('aiConfigStatus').textContent=r.message;el('aiConnection').textContent='连接成功 · '+el('aiModel').value;}catch(e){el('aiConfigStatus').textContent=e.message;}finally{el('aiConfigTest').disabled=false;}};
- el('aiMic').onclick=()=>{if(aiRecognition){aiRecognition.stop();return;}const Recognition=window.SpeechRecognition||window.webkitSpeechRecognition;if(!Recognition){aiShowError('当前浏览器不支持语音识别，请直接输入文字。');return;}try{aiRecognition=new Recognition();aiRecognition.lang='zh-CN';aiRecognition.onresult=e=>{el('aiInput').value=(el('aiInput').value+e.results[0][0].transcript).slice(0,2000);aiCount();el('aiInput').focus();};aiRecognition.onerror=()=>aiShowError('语音识别失败，请检查浏览器麦克风权限或直接输入文字。');aiRecognition.onend=()=>{aiRecognition=null;el('aiMic').textContent='♩ 语音输入';};aiRecognition.start();el('aiMic').textContent='结束录音';aiShowError('语音由浏览器识别，完成后请检查文字再发送。');}catch{aiRecognition=null;aiShowError('无法启动语音，请直接输入文字。');}};
  el('aiDrawer').addEventListener('keydown',e=>{if(e.key==='Escape'){aiClose();return;}if(e.key==='Tab'&&window.innerWidth<1500){const focusable=[...el('aiDrawer').querySelectorAll('button,input,textarea,select,summary')].filter(n=>!n.disabled&&n.getClientRects().length),first=focusable[0],last=focusable.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
  window.addEventListener('resize',()=>{if(!el('aiDrawer').hidden)aiSetModalMode();});
 }
