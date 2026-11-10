@@ -142,3 +142,12 @@ assert.match(vm.runInContext('aiText("<script>alert(1)</script> **明确依据**
 assert.doesNotMatch(vm.runInContext('aiText("<img src=x onerror=alert(1)>")',context),/<img/);
 assert.match(vm.runInContext('aiText("**明确依据**")',context),/<strong>明确依据<\/strong>/);
 console.log('PASS assistant UI: model text is escaped before limited bold formatting');
+
+assert.match(vm.runInContext('aiText("## 标题\\n|项目|金额|\\n|---|---|\\n|净资产|100|\\n\\n- 核对账户")',context),/<h3>标题<\/h3>/);
+assert.match(vm.runInContext('aiText("|项目|金额|\\n|---|---|\\n|净资产|100|")',context),/<table>/);
+assert.doesNotMatch(vm.runInContext('aiText("|<script>bad</script>|金额|\\n|---|---|\\n|净资产|100|")',context),/<script>/);
+console.log('PASS report rendering: headings, tables, lists, and escaped HTML');
+
+const portfolioCard=vm.runInContext(`aiDataCard([{name:'asset_summary',ok:true,data:{netWorth:999999,assets:1000000,liabilities:1}}],{diagnosis:{domain:'portfolio',complete:true,asOf:'2026-11-10T04:00:00Z',warnings:[],holdings:[],facts:[{id:'securities_value',value:20000,unit:'CNY'},{id:'portfolio_cash',value:1000,unit:'CNY'},{id:'top_security_weight',value:70,unit:'%'}]}})`,context);
+assert.match(portfolioCard,/证券市值/);assert.doesNotMatch(portfolioCard,/净资产|999,999/);
+console.log('PASS question scope: portfolio cards cannot be replaced by household asset summaries');

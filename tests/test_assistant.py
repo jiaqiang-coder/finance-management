@@ -55,14 +55,15 @@ with tempfile.TemporaryDirectory() as t:
   call('transactions',{'occurredOn':'2026-11-08','merchant':'港币支出','category':'其他','type':'expense','amount':99,'currency':'HKD'},expected=201)
   thread,request=send('多轮资产体检')
   result=finish(thread);answer=result['messages'][-1]
-  assert answer['status']=='complete' and '80000' in answer['content'],answer
-  assert [d['name'] for d in answer['details']]==['asset_summary','accounts']
+  assert answer['status']=='complete' and '80,000' in answer['content'] and '下一步' in answer['content'],answer
+  assert [d['name'] for d in answer['details']]==['financial_diagnosis','accounts']
+  assert answer['run']['phase']=='complete' and answer['run']['report'] and answer['run']['checks']
   call('assistant/threads/'+thread+'/messages',{'content':'多轮资产体检','requestId':request})
   assert len(call('assistant/threads/'+thread+'/messages')[0]['messages'])==2
   report=call('assistant/reports',{'messageId':answer['id']},expected=201)[0]['id']
   assert call('assistant/reports',{'messageId':answer['id']},expected=201)[0]['id']==report
   thread,_=send('人民币收支');r=finish(thread);d=r['messages'][-1]['details'][0]['data'];assert len(d['rows'])==1 and d['rows'][0]['currency']=='CNY'
-  thread,_=send('现金方案，每月必要开支3万元');r=finish(thread);v=r['messages'][-1]['details'][0]['data'];assert v['cash']==100000 and v['coverageMonths']==3.33 and v['scenarios'][0]['remainingCash']==10000 and v['scenarios'][1]['shortfall']==80000,v
+  thread,_=send('现金方案，每月必要开支3万元');r=finish(thread);v=next(d['data'] for d in r['messages'][-1]['details'] if d['name']=='reserve_scenarios');assert v['cash']==100000 and v['coverageMonths']==3.33 and v['scenarios'][0]['remainingCash']==10000 and v['scenarios'][1]['shortfall']==80000,v
   for text in ['持仓','预算','趋势']:
    thread,_=send(text);r=finish(thread);assert r['messages'][-1]['details'][0]['ok'],r
   thread,_=send('修改流水');r=finish(thread);assert len(r['actions'])==1
@@ -76,12 +77,42 @@ with tempfile.TemporaryDirectory() as t:
   call('assistant/actions/'+action['id'],{'decision':'confirm'},expected=409)
   call('assistant/actions/'+action['id'],{'decision':'cancel'})
   with sqlite3.connect(app/'data/hengzi.db') as c:assert c.execute('SELECT category FROM accounts WHERE id=?',(cash,)).fetchone()[0]=='银行存款'
-  old=call('assistant/reports/'+report)[0];assert old['details'][0]['data']['netWorth']==80000
+  old=call('assistant/reports/'+report)[0];assert old['details'][0]['data']['summary']['netWorth']==80000
   for text in ['认证失败','限流','超时','损坏响应']:
    thread,_=send(text);assert finish(thread)['messages'][-1]['status']=='failed'
   for text in ['工具越权','无效参数']:
    thread,_=send(text);r=finish(thread);assert r['messages'][-1]['details'][0]['ok'] is False
   with sqlite3.connect(app/'data/hengzi.db') as c:assert c.execute('SELECT COUNT(*) FROM accounts').fetchone()[0]==2
+  with sqlite3.connect(app/'data/hengzi.db') as c:
+   c.execute('INSERT OR REPLACE INTO fx_cache VALUES(1,?)',(json.dumps({'rates':{'CNY':1,'USD':7,'HKD':.9},'quotedAt':'2026-11-10','fetchedAt':int(time.time()*1000),'stale':False}),))
+  first_book=call('investments/accounts',{'name':'股票账户甲'},expected=201)[0]['id']
+  second_book=call('investments/accounts',{'name':'股票账户乙'},expected=201)[0]['id']
+  def opening(book,**values):
+   call('investments/accounts/'+str(book)+'/events',{'type':'opening','day':'2026-11-08','requestId':str(uuid.uuid4()),'fee':0,**values},expected=201)
+  opening(first_book,market='CN',exchange='SSE',symbol='510300',name='指数ETF',quantity=1000,price=4)
+  opening(second_book,market='CN',exchange='SSE',symbol='510300',name='指数ETF',quantity=500,price=4)
+  opening(second_book,market='US',exchange='NASDAQ',symbol='AAPL',name='苹果',quantity=10,price=200)
+  thread,_=send('我的股票持仓有没有风险');r=finish(thread);m=r['messages'][-1];d=m['run']['diagnosis']
+  assert m['status']=='complete' and m['run']['domain']=='portfolio',m
+  assert [x['name'] for x in m['details']]==['portfolio_diagnosis']
+  assert len(d['holdings'])==2 and d['holdings'][0]['symbol']=='AAPL' and d['holdings'][0]['weightPct']==70,d
+  assert next(f['value'] for f in d['facts'] if f['id']=='securities_shock_20')==-4000
+  assert 'property_value' not in [f['id'] for f in d['facts']] and '房产' not in json.dumps(d,ensure_ascii=False)
+  assert len(m['run']['report']['priorities'])>=3 and len(m['run']['report']['comparisons'])>=2
+  thread,_=send('股票持仓风险，错用资产工具测试');r=finish(thread);m=r['messages'][-1]
+  assert m['status']=='complete' and any(not x['ok'] and x['name']=='asset_summary' for x in m['details']),m
+  assert all('assets' not in x.get('data',{}) for x in m['details'])
+  thread,_=send('股票持仓风险，错误依据测试');r=finish(thread);m=r['messages'][-1]
+  assert m['status']=='complete' and any('事实编号' in x for x in m['run']['checks'])
+  thread,_=send('股票持仓风险，一直无效');r=finish(thread);assert r['messages'][-1]['status']=='failed'
+  thread,_=send('输出截断测试');r=finish(thread);assert r['messages'][-1]['status']=='complete' and '接续内容' in r['messages'][-1]['content']
+  thread,_=send('持续截断测试');r=finish(thread);assert r['messages'][-1]['status']=='partial'
+  call('assistant/reports',{'messageId':r['messages'][-1]['id']},expected=400)
+  call('assistant/config',{**config,'model':'deepseek-flash','url':'https://api.deepseek.com/chat/completions'},method='PUT')
+  for question in ['我的股票持仓有没有风险','继续分析我的持仓风险','AAPL有没有风险','那你建议怎么调整']:
+   thread,_=send(question,thread if question.startswith(('继续','那')) else None);r=finish(thread)
+   assert r['messages'][-1]['status']=='complete' and r['messages'][-1]['run']['domain']=='portfolio',r
+   assert 'fixture-private-reasoning' not in json.dumps(r),r
  finally:p.terminate();p.wait()
  p=start()
  try:
