@@ -1,6 +1,6 @@
 {
   "name": "hengzi-personal-finance",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "衡资个人资产与现金流管理应用",
   "scripts": {
